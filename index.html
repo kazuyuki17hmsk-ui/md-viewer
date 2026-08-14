@@ -75,6 +75,19 @@
   #screen-viewer .toc-panel {
     flex: 0 0 auto;
   }
+  /* ビューアのヘッダーは、幅が足りない場合にタイトルを専用行に折り返す */
+  #screen-viewer header {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  #screen-viewer header h1 {
+    order: -1;
+    flex: 1 1 100%;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 
   /* 本棚一覧画面 */
   #bookshelf-list {
