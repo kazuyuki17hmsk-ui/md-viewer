@@ -135,6 +135,63 @@
     font-size: 0.85rem;
     color: #777;
   }
+
+  /* Google Driveパネル */
+  .drive-panel {
+    display: none;
+    background: #fff;
+    border-bottom: 1px solid var(--border);
+    padding: 16px;
+  }
+  .drive-panel.open {
+    display: block;
+  }
+  .drive-breadcrumb {
+    margin-bottom: 10px;
+    font-size: 0.9rem;
+    color: #555;
+  }
+  .drive-breadcrumb-item {
+    cursor: pointer;
+  }
+  .drive-breadcrumb-item:hover {
+    color: var(--accent);
+    text-decoration: underline;
+  }
+  #drive-folder-list {
+    list-style: none;
+    margin: 0 0 12px;
+    padding: 0;
+    max-height: 240px;
+    overflow-y: auto;
+  }
+  #drive-folder-list li {
+    padding: 8px 4px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+  }
+  #drive-folder-list li:last-child {
+    border-bottom: none;
+  }
+  #drive-folder-list li:hover {
+    color: var(--accent);
+  }
+  .drive-empty {
+    color: #888;
+    cursor: default !important;
+  }
+  .drive-actions button {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 8px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .drive-actions button:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
   .empty-state {
     padding: 40px 16px;
     text-align: center;
@@ -396,11 +453,19 @@
     <header>
       <h1>本棚</h1>
       <div class="header-actions">
+        <button id="btn-drive-open" type="button">☁️ Google Drive</button>
         <button id="btn-backup-toggle" type="button">⚙ バックアップ</button>
         <button id="btn-import-files" type="button">＋ ファイルを追加</button>
         <button id="btn-open-folder" type="button">フォルダを開く</button>
       </div>
     </header>
+    <div id="drive-panel" class="drive-panel">
+      <div id="drive-breadcrumb" class="drive-breadcrumb"></div>
+      <ul id="drive-folder-list"></ul>
+      <div class="drive-actions">
+        <button id="btn-drive-load-here" type="button">📥 このフォルダを読み込む</button>
+      </div>
+    </div>
     <div id="backup-panel" class="backup-panel">
       <button id="btn-backup-export" type="button">📤 バックアップをエクスポート</button>
       <button id="btn-backup-import" type="button">📥 バックアップをインポート</button>
@@ -457,6 +522,7 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
 (function () {
   const screenBookshelf = document.getElementById('screen-bookshelf');
@@ -492,15 +558,21 @@
   const btnBackupExport = document.getElementById('btn-backup-export');
   const btnBackupImport = document.getElementById('btn-backup-import');
   const backupImportInput = document.getElementById('backup-import-input');
+  const btnDriveOpen = document.getElementById('btn-drive-open');
+  const drivePanel = document.getElementById('drive-panel');
+  const driveBreadcrumbEl = document.getElementById('drive-breadcrumb');
+  const driveFolderListEl = document.getElementById('drive-folder-list');
+  const btnDriveLoadHere = document.getElementById('btn-drive-load-here');
 
-  // mdFiles の各要素: { name, relPath, source: 'fs' | 'idb', handle?, id?, content? }
+  // mdFiles の各要素: { name, relPath, source: 'fs' | 'idb' | 'drive', handle?, id?, content?, fileId? }
   let mdFiles = [];
   let fsFiles = []; // フォルダ走査で見つかったファイル(セッション限り)
   let idbFilesList = []; // IndexedDBにインポート済みのファイル(永続)
+  let driveFiles = []; // Google Driveから読み込んだファイル(セッション限り)
   let currentFile = null; // 現在ビューアで開いているファイル
 
   function recomputeMdFiles() {
-    mdFiles = [...fsFiles, ...idbFilesList].sort((a, b) => a.relPath.localeCompare(b.relPath, 'ja'));
+    mdFiles = [...fsFiles, ...idbFilesList, ...driveFiles].sort((a, b) => a.relPath.localeCompare(b.relPath, 'ja'));
   }
 
   // スマホ向けファイルインポートの永続化(IndexedDB)
@@ -553,6 +625,188 @@
       tx.onerror = () => reject(tx.error);
     });
   }
+
+  // Google Drive連携
+  const GOOGLE_CLIENT_ID = '179784899748-ckb2osf9m7akhmd92cltfsls5mj25dac.apps.googleusercontent.com';
+  const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
+
+  let driveAccessToken = null;
+  let driveTokenClient = null;
+  let driveCurrentFolderId = 'root';
+  let driveCurrentPath = [{ id: 'root', name: 'マイドライブ' }];
+
+  function getDriveTokenClient() {
+    if (driveTokenClient) return driveTokenClient;
+    if (!window.google || !window.google.accounts || !window.google.accounts.oauth2) return null;
+    driveTokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: GOOGLE_CLIENT_ID,
+      scope: DRIVE_SCOPE,
+      callback: '' // requestDriveAccessToken内で都度差し替える
+    });
+    return driveTokenClient;
+  }
+
+  function requestDriveAccessToken() {
+    return new Promise((resolve, reject) => {
+      const client = getDriveTokenClient();
+      if (!client) {
+        reject(new Error('Google認証ライブラリの読み込みに失敗しました。通信環境を確認してください。'));
+        return;
+      }
+      client.callback = (resp) => {
+        if (resp.error) {
+          reject(new Error('Google認証に失敗しました: ' + resp.error));
+          return;
+        }
+        driveAccessToken = resp.access_token;
+        resolve(driveAccessToken);
+      };
+      client.requestAccessToken();
+    });
+  }
+
+  async function driveApiFetch(url) {
+    const res = await fetch(url, { headers: { Authorization: 'Bearer ' + driveAccessToken } });
+    if (res.status === 401) {
+      driveAccessToken = null;
+      throw new Error('認証の有効期限が切れました。もう一度「Google Drive」ボタンから開き直してください。');
+    }
+    if (!res.ok) {
+      throw new Error('Drive APIエラー(status ' + res.status + ')');
+    }
+    return res.json();
+  }
+
+  async function listDriveChildren(folderId) {
+    const q = encodeURIComponent(`'${folderId}' in parents and trashed = false`);
+    const fields = encodeURIComponent('files(id,name,mimeType)');
+    const url = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=${fields}&pageSize=1000&orderBy=folder,name`;
+    const data = await driveApiFetch(url);
+    return data.files || [];
+  }
+
+  // 指定フォルダ以下を再帰的に走査し、.mdファイルを集める
+  async function scanDriveFolder(folderId, relPath) {
+    const children = await listDriveChildren(folderId);
+    const results = [];
+    for (const child of children) {
+      const entryRelPath = relPath ? relPath + '/' + child.name : child.name;
+      if (child.mimeType === 'application/vnd.google-apps.folder') {
+        const sub = await scanDriveFolder(child.id, entryRelPath);
+        results.push(...sub);
+      } else if (child.name.toLowerCase().endsWith('.md')) {
+        results.push({ name: child.name, relPath: entryRelPath, source: 'drive', fileId: child.id });
+      }
+    }
+    return results;
+  }
+
+  async function fetchDriveFileContent(fileId) {
+    const url = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
+    const res = await fetch(url, { headers: { Authorization: 'Bearer ' + driveAccessToken } });
+    if (!res.ok) {
+      throw new Error('ファイルの取得に失敗しました(status ' + res.status + ')');
+    }
+    return res.text();
+  }
+
+  function renderDriveBreadcrumb() {
+    driveBreadcrumbEl.innerHTML = '';
+    driveCurrentPath.forEach((seg, i) => {
+      const isLast = i === driveCurrentPath.length - 1;
+      const span = document.createElement('span');
+      span.textContent = seg.name;
+      span.className = 'drive-breadcrumb-item';
+      if (!isLast) {
+        span.addEventListener('click', () => {
+          driveCurrentPath = driveCurrentPath.slice(0, i + 1);
+          driveCurrentFolderId = seg.id;
+          renderDriveBrowser();
+        });
+      }
+      driveBreadcrumbEl.appendChild(span);
+      if (!isLast) {
+        driveBreadcrumbEl.appendChild(document.createTextNode(' / '));
+      }
+    });
+  }
+
+  async function renderDriveBrowser() {
+    renderDriveBreadcrumb();
+    driveFolderListEl.innerHTML = '<li class="drive-empty">読み込み中...</li>';
+    try {
+      const children = await listDriveChildren(driveCurrentFolderId);
+      const folders = children.filter(c => c.mimeType === 'application/vnd.google-apps.folder');
+      driveFolderListEl.innerHTML = '';
+      if (folders.length === 0) {
+        const li = document.createElement('li');
+        li.className = 'drive-empty';
+        li.textContent = 'サブフォルダはありません。「このフォルダを読み込む」で.mdファイルを取得できます。';
+        driveFolderListEl.appendChild(li);
+        return;
+      }
+      folders.forEach(folder => {
+        const li = document.createElement('li');
+        li.textContent = '📁 ' + folder.name;
+        li.addEventListener('click', () => {
+          driveCurrentPath.push({ id: folder.id, name: folder.name });
+          driveCurrentFolderId = folder.id;
+          renderDriveBrowser();
+        });
+        driveFolderListEl.appendChild(li);
+      });
+    } catch (err) {
+      driveFolderListEl.innerHTML = '';
+      const li = document.createElement('li');
+      li.className = 'drive-empty';
+      li.textContent = err.message;
+      driveFolderListEl.appendChild(li);
+    }
+  }
+
+  async function openDrivePanel() {
+    drivePanel.classList.add('open');
+    backupPanel.classList.remove('open');
+    driveFolderListEl.innerHTML = '<li class="drive-empty">Google認証中...</li>';
+    try {
+      await requestDriveAccessToken();
+      driveCurrentFolderId = 'root';
+      driveCurrentPath = [{ id: 'root', name: 'マイドライブ' }];
+      await renderDriveBrowser();
+    } catch (err) {
+      driveFolderListEl.innerHTML = '';
+      const li = document.createElement('li');
+      li.className = 'drive-empty';
+      li.textContent = err.message;
+      driveFolderListEl.appendChild(li);
+    }
+  }
+
+  btnDriveOpen.addEventListener('click', () => {
+    const willOpen = !drivePanel.classList.contains('open');
+    if (willOpen) {
+      openDrivePanel();
+    } else {
+      drivePanel.classList.remove('open');
+    }
+  });
+
+  btnDriveLoadHere.addEventListener('click', async () => {
+    btnDriveLoadHere.disabled = true;
+    const originalLabel = btnDriveLoadHere.textContent;
+    btnDriveLoadHere.textContent = '読み込み中...';
+    try {
+      driveFiles = await scanDriveFolder(driveCurrentFolderId, '');
+      recomputeMdFiles();
+      renderBookshelf();
+      drivePanel.classList.remove('open');
+    } catch (err) {
+      alert('Driveからの読み込みに失敗しました: ' + err.message);
+    } finally {
+      btnDriveLoadHere.disabled = false;
+      btnDriveLoadHere.textContent = originalLabel;
+    }
+  });
 
   // しおり・既読位置の永続化(localStorage)
   const READING_POS_KEY = 'mdViewer.readingPositions';
@@ -964,6 +1218,8 @@
       let text;
       if (file.source === 'idb') {
         text = file.content;
+      } else if (file.source === 'drive') {
+        text = await fetchDriveFileContent(file.fileId);
       } else {
         const fileHandle = await file.handle.getFile();
         text = await fileHandle.text();
@@ -1038,6 +1294,11 @@
           renderBookshelf();
         });
         item.appendChild(delBtn);
+      } else if (file.source === 'drive') {
+        const sourceEl = document.createElement('div');
+        sourceEl.className = 'book-item-source';
+        sourceEl.textContent = '☁️ Drive';
+        item.appendChild(sourceEl);
       }
 
       bookshelfList.appendChild(item);
@@ -1094,7 +1355,11 @@
 
   // バックアップ(しおり・既読位置・フォント設定)のJSONエクスポート/インポート
   btnBackupToggle.addEventListener('click', () => {
-    backupPanel.classList.toggle('open');
+    const willOpen = !backupPanel.classList.contains('open');
+    backupPanel.classList.toggle('open', willOpen);
+    if (willOpen) {
+      drivePanel.classList.remove('open');
+    }
   });
 
   function exportBackup() {
