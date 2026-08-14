@@ -214,8 +214,11 @@
   /* ビューア画面 */
   .header-actions {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
+    justify-content: center;
     gap: 10px;
+    row-gap: 8px;
   }
   .font-controls {
     display: flex;
@@ -494,9 +497,9 @@
   <!-- ビューア画面 -->
   <section id="screen-viewer" class="screen">
     <header>
-      <button id="btn-back-to-bookshelf" type="button">← 本棚</button>
       <h1 id="viewer-title">タイトル</h1>
       <div class="header-actions">
+        <button id="btn-back-to-bookshelf" type="button">← 本棚</button>
         <button id="btn-toc-toggle" type="button">📑 目次</button>
         <button id="btn-search-toggle" type="button">🔍 検索</button>
         <button id="btn-bookmark-toggle" type="button">🔖 しおり</button>
