@@ -26,28 +26,37 @@
     height: 100%;
   }
 
-  /* ヘッダー共通 */
+  /* ヘッダー共通: タイトルを専用行にし、その下にボタン群を折り返して配置する */
   header {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
+    row-gap: 8px;
     padding: 10px 16px;
     background: var(--accent);
     color: #fff;
     flex: 0 0 auto;
   }
   header h1 {
+    order: -1;
+    flex: 1 1 100%;
     font-size: 1.1rem;
     margin: 0;
     font-weight: normal;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   header button {
     background: none;
     border: 1px solid rgba(255,255,255,0.6);
     color: #fff;
-    padding: 6px 12px;
+    padding: 6px 10px;
     border-radius: 4px;
-    font-size: 0.9rem;
+    font-size: 0.85rem;
+    white-space: nowrap;
     cursor: pointer;
   }
   header button:hover {
@@ -75,20 +84,6 @@
   #screen-viewer .toc-panel {
     flex: 0 0 auto;
   }
-  /* ビューアのヘッダーは、幅が足りない場合にタイトルを専用行に折り返す */
-  #screen-viewer header {
-    flex-wrap: wrap;
-    row-gap: 8px;
-  }
-  #screen-viewer header h1 {
-    order: -1;
-    flex: 1 1 100%;
-    text-align: center;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
   /* 本棚一覧画面 */
   #bookshelf-list {
     padding: 16px;
@@ -217,15 +212,17 @@
     flex-wrap: wrap;
     align-items: center;
     justify-content: center;
-    gap: 10px;
+    gap: 6px;
     row-gap: 8px;
   }
   .font-controls {
     display: flex;
-    gap: 6px;
+    gap: 4px;
   }
   .font-controls button {
-    min-width: 36px;
+    min-width: 32px;
+    padding-left: 6px;
+    padding-right: 6px;
   }
 
   /* しおりパネル */
@@ -469,8 +466,8 @@
     <header>
       <h1>本棚</h1>
       <div class="header-actions">
-        <button id="btn-drive-open" type="button">☁️ Google Drive</button>
-        <button id="btn-backup-toggle" type="button">⚙ バックアップ</button>
+        <button id="btn-drive-open" type="button">Drive</button>
+        <button id="btn-backup-toggle" type="button">バックアップ</button>
         <button id="btn-import-files" type="button">＋ ファイルを追加</button>
         <button id="btn-open-folder" type="button">フォルダを開く</button>
       </div>
@@ -479,12 +476,12 @@
       <div id="drive-breadcrumb" class="drive-breadcrumb"></div>
       <ul id="drive-folder-list"></ul>
       <div class="drive-actions">
-        <button id="btn-drive-load-here" type="button">📥 このフォルダを読み込む</button>
+        <button id="btn-drive-load-here" type="button">このフォルダを読み込む</button>
       </div>
     </div>
     <div id="backup-panel" class="backup-panel">
-      <button id="btn-backup-export" type="button">📤 バックアップをエクスポート</button>
-      <button id="btn-backup-import" type="button">📥 バックアップをインポート</button>
+      <button id="btn-backup-export" type="button">バックアップをエクスポート</button>
+      <button id="btn-backup-import" type="button">バックアップをインポート</button>
       <input type="file" id="backup-import-input" accept=".json" style="display: none;">
       <p class="backup-note">しおり・既読位置・フォントサイズ設定をJSONファイルに保存/復元します(端末間の手動同期やバックアップ用)。</p>
     </div>
@@ -500,9 +497,9 @@
       <h1 id="viewer-title">タイトル</h1>
       <div class="header-actions">
         <button id="btn-back-to-bookshelf" type="button">← 本棚</button>
-        <button id="btn-toc-toggle" type="button">📑 目次</button>
-        <button id="btn-search-toggle" type="button">🔍 検索</button>
-        <button id="btn-bookmark-toggle" type="button">🔖 しおり</button>
+        <button id="btn-toc-toggle" type="button">目次</button>
+        <button id="btn-search-toggle" type="button">検索</button>
+        <button id="btn-bookmark-toggle" type="button">しおり</button>
         <div class="font-controls">
           <button id="btn-font-decrease" type="button" aria-label="文字を小さく">A-</button>
           <button id="btn-font-increase" type="button" aria-label="文字を大きく">A+</button>
@@ -531,8 +528,8 @@
   </section>
 
   <div id="selection-toolbar">
-    <button id="selection-search-btn" type="button">🔍 Web検索</button>
-    <button id="selection-inpage-search-btn" type="button">🔎 文中検索</button>
+    <button id="selection-search-btn" type="button">Web検索</button>
+    <button id="selection-inpage-search-btn" type="button">文中検索</button>
   </div>
 
 </div>
@@ -1295,7 +1292,7 @@
       if (file.source === 'idb') {
         const sourceEl = document.createElement('div');
         sourceEl.className = 'book-item-source';
-        sourceEl.textContent = '📱 インポート';
+        sourceEl.textContent = 'インポート';
         item.appendChild(sourceEl);
 
         const delBtn = document.createElement('button');
@@ -1313,7 +1310,7 @@
       } else if (file.source === 'drive') {
         const sourceEl = document.createElement('div');
         sourceEl.className = 'book-item-source';
-        sourceEl.textContent = '☁️ Drive';
+        sourceEl.textContent = 'Drive';
         item.appendChild(sourceEl);
       }
 
