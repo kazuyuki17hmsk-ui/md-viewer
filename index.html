@@ -202,6 +202,39 @@
     color: #777;
   }
 
+  /* Drive同期(appDataFolder) */
+  .sync-section {
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+  }
+  .sync-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.9rem;
+    cursor: pointer;
+  }
+  .sync-toggle input {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+  }
+  .sync-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+  }
+  .sync-status {
+    font-size: 0.85rem;
+    color: #777;
+  }
+  .sync-status.error {
+    color: #a33;
+  }
+
   /* Google Driveパネル */
   .drive-panel {
     display: none;
@@ -779,6 +812,17 @@
       <button id="btn-backup-import" type="button">バックアップをインポート</button>
       <input type="file" id="backup-import-input" accept=".json" style="display: none;">
       <p class="backup-note">しおり・既読位置・フォントサイズ設定をJSONファイルに保存/復元します(端末間の手動同期やバックアップ用)。インポートは既存のしおりを上書きせず、更新日時の新しい方を採用してマージします。</p>
+      <div class="sync-section">
+        <label class="sync-toggle">
+          <input type="checkbox" id="drive-sync-toggle">
+          <span>Google Driveでしおり・ハイライトを自動同期する</span>
+        </label>
+        <div class="sync-actions">
+          <button id="btn-sync-now" type="button">今すぐ同期</button>
+          <span id="sync-status" class="sync-status"></span>
+        </div>
+        <p class="backup-note">アプリ専用の隠しフォルダ(appDataFolder)に本ごとのJSONとして保存します。原稿ファイルへの書き込み権限は不要です。端末間では注釈ごとに更新日時の新しい方を採用してマージするため、両方の変更が残ります。</p>
+      </div>
     </div>
     <input type="file" id="file-import-input" accept=".md" multiple style="display: none;">
     <div id="bookshelf-list">
@@ -906,6 +950,9 @@
   const driveActionsEl = document.getElementById('drive-actions');
   const btnDriveLoadHere = document.getElementById('btn-drive-load-here');
   const driveLastFolderEl = document.getElementById('drive-last-folder');
+  const driveSyncToggle = document.getElementById('drive-sync-toggle');
+  const btnSyncNow = document.getElementById('btn-sync-now');
+  const syncStatusEl = document.getElementById('sync-status');
 
   // mdFiles の各要素: { name, bookId, relPath, source: 'fs' | 'idb' | 'drive', handle?, id?, content?, fileId? }
   let mdFiles = [];
@@ -1019,14 +1066,34 @@
 
   // Google Drive連携
   const GOOGLE_CLIENT_ID = '179784899748-ckb2osf9m7akhmd92cltfsls5mj25dac.apps.googleusercontent.com';
-  const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
+  const DRIVE_READONLY_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
+  // アプリ専用の隠しフォルダ。原稿ファイルへの書き込み権限は含まれない
+  const DRIVE_APPDATA_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
+  const DRIVE_SYNC_ENABLED_KEY = 'mdViewer.driveSyncEnabled';
+  const DRIVE_LAST_SYNC_KEY = 'mdViewer.driveLastSyncAt';
   const PUBLISHED_APP_URL = 'https://kazuyuki17hmsk-ui.github.io/md-viewer/';
   const DRIVE_AUTH_TIMEOUT_MS = 120000;
 
   let driveAccessToken = null;
   let driveTokenClient = null;
+  let driveTokenClientScope = null; // スコープが変わったらクライアントを作り直す
+  let driveGrantedScopes = '';
   let driveCurrentFolderId = 'root';
   let driveCurrentPath = [{ id: 'root', name: 'マイドライブ' }];
+
+  // 同期を有効にした時だけ appdata スコープを要求する。
+  // そうしないと、同期を使わないユーザーにまで再同意を強いることになる。
+  let driveSyncEnabled = loadJSON(DRIVE_SYNC_ENABLED_KEY, false) === true;
+
+  function getCurrentDriveScope() {
+    return driveSyncEnabled
+      ? DRIVE_READONLY_SCOPE + ' ' + DRIVE_APPDATA_SCOPE
+      : DRIVE_READONLY_SCOPE;
+  }
+
+  function hasAppDataScope() {
+    return driveGrantedScopes.split(/\s+/).indexOf(DRIVE_APPDATA_SCOPE) !== -1;
+  }
 
   // GoogleのOAuthは https:// か localhost のオリジンしか受け付けない。
   // file:// で開いた場合はポップアップが「エラー400: invalid_request」で止まるため、事前に弾いて案内する。
@@ -1040,13 +1107,15 @@
   }
 
   function getDriveTokenClient() {
-    if (driveTokenClient) return driveTokenClient;
+    const scope = getCurrentDriveScope();
+    if (driveTokenClient && driveTokenClientScope === scope) return driveTokenClient;
     if (!window.google || !window.google.accounts || !window.google.accounts.oauth2) return null;
     driveTokenClient = google.accounts.oauth2.initTokenClient({
       client_id: GOOGLE_CLIENT_ID,
-      scope: DRIVE_SCOPE,
+      scope,
       callback: '' // requestDriveAccessToken内で都度差し替える
     });
+    driveTokenClientScope = scope;
     return driveTokenClient;
   }
 
@@ -1091,6 +1160,7 @@
           return;
         }
         driveAccessToken = resp.access_token;
+        driveGrantedScopes = resp.scope || '';
         finish(resolve, driveAccessToken);
       };
       client.error_callback = (err) => {
@@ -1588,6 +1658,39 @@
   });
   window.addEventListener('beforeunload', flushReadingPosition);
 
+  // 端末間マージの中核。バックアップJSONのインポートとDrive同期の両方から使う。
+  // 注釈id単位で updatedAt の新しい方を採用し、削除(deleted)も「新しい更新」として尊重する。
+  // 全上書きは絶対にしない —— それをやると相手側の端末の変更が消える。
+  function mergeAnnotationList(bookId, incoming) {
+    let added = 0;
+    let updated = 0;
+    if (!Array.isArray(incoming)) return { added, updated };
+    if (!annotations[bookId]) annotations[bookId] = [];
+    const local = annotations[bookId];
+    incoming.forEach(ann => {
+      if (!ann || !ann.id) return;
+      const existing = local.find(a => a.id === ann.id);
+      if (!existing) {
+        local.push(ann);
+        added++;
+      } else if ((ann.updatedAt || '') > (existing.updatedAt || '')) {
+        Object.assign(existing, ann);
+        updated++;
+      }
+    });
+    return { added, updated };
+  }
+
+  function mergeReadingPosition(bookId, incoming) {
+    if (!incoming || typeof incoming.offset !== 'number') return false;
+    const existing = readingPositions[bookId];
+    if (!existing || (incoming.updatedAt || '') > (existing.updatedAt || '')) {
+      readingPositions[bookId] = incoming;
+      return true;
+    }
+    return false;
+  }
+
   // 注釈(しおり・ハイライト・メモを1モデルに統合。type: 'bookmark' | 'highlight')
   const HIGHLIGHT_COLORS = ['yellow', 'green', 'blue', 'pink'];
   const DEFAULT_HIGHLIGHT_COLOR = 'yellow';
@@ -1598,6 +1701,7 @@
   }
   function saveAnnotations() {
     saveJSON(ANNOTATIONS_KEY, annotations);
+    if (currentFile) scheduleSync(currentFile.bookId); // Drive同期が有効なら少し待って送る
   }
   function updateAnnotation(bookId, id, patch) {
     const list = annotations[bookId];
@@ -2452,6 +2556,7 @@
       renderBookmarkList();
       const saved = readingPositions[file.bookId];
       scrollToOffset(saved ? saved.offset : 0);
+      pullBookInBackground(file.bookId);
     } catch (err) {
       viewerContent.textContent = 'ファイルの読み込みに失敗しました: ' + err.message;
       renderedHTML = viewerContent.innerHTML;
@@ -2762,33 +2867,15 @@
     // これで「Chromebookでしおり追加 → スマホでメモ編集」が両方残る。
     if (data.annotations && typeof data.annotations === 'object') {
       Object.keys(data.annotations).forEach(bookId => {
-        const incoming = data.annotations[bookId];
-        if (!Array.isArray(incoming)) return;
-        if (!annotations[bookId]) annotations[bookId] = [];
-        const local = annotations[bookId];
-        incoming.forEach(ann => {
-          if (!ann || !ann.id) return;
-          const existing = local.find(a => a.id === ann.id);
-          if (!existing) {
-            local.push(ann);
-            added++;
-          } else if ((ann.updatedAt || '') > (existing.updatedAt || '')) {
-            Object.assign(existing, ann); // 削除フラグも「新しい更新」として尊重する
-            updated++;
-          }
-        });
+        const r = mergeAnnotationList(bookId, data.annotations[bookId]);
+        added += r.added;
+        updated += r.updated;
       });
       saveAnnotations();
     }
     if (data.version !== 1 && data.readingPositions && typeof data.readingPositions === 'object') {
       Object.keys(data.readingPositions).forEach(bookId => {
-        const entry = data.readingPositions[bookId];
-        if (!entry || typeof entry.offset !== 'number') return;
-        const existing = readingPositions[bookId];
-        if (!existing || (entry.updatedAt || '') > (existing.updatedAt || '')) {
-          readingPositions[bookId] = entry;
-          updated++;
-        }
+        if (mergeReadingPosition(bookId, data.readingPositions[bookId])) updated++;
       });
       saveJSON(READING_POS_V2_KEY, readingPositions);
     }
@@ -2813,6 +2900,289 @@
       await importBackup(file);
     }
     backupImportInput.value = '';
+  });
+
+  // Drive appDataFolder による注釈の自動同期
+  // 同期単位は「本ごとに1ファイル」。全体を1ファイルにすると端末間の衝突が頻発するため。
+  const APPDATA_FILE_PREFIX = 'ann-';
+  const SYNC_DEBOUNCE_MS = 6000;
+
+  let appDataFileIndex = null; // { ファイル名: fileId }
+  let syncInProgress = false;  // マージ時のsaveがまた同期を予約するのを防ぐ
+  let syncPushTimer = null;
+  const pendingSyncBooks = new Set();
+  let driveLastSyncAt = loadJSON(DRIVE_LAST_SYNC_KEY, null);
+
+  function setSyncStatus(text, isError) {
+    syncStatusEl.textContent = text || '';
+    syncStatusEl.classList.toggle('error', !!isError);
+  }
+
+  function renderSyncStatus() {
+    if (!driveSyncEnabled) {
+      setSyncStatus('同期はオフです。');
+      return;
+    }
+    setSyncStatus(driveLastSyncAt
+      ? '最終同期: ' + new Date(driveLastSyncAt).toLocaleString('ja-JP')
+      : '未同期です。「今すぐ同期」を押してください。');
+  }
+
+  function syncFileNameFor(bookId) {
+    // bookIdは日本語を含みうるのでURIエンコードしてファイル名に使う
+    return APPDATA_FILE_PREFIX + encodeURIComponent(bookId) + '.json';
+  }
+  function bookIdFromSyncFileName(name) {
+    if (!name.startsWith(APPDATA_FILE_PREFIX) || !name.endsWith('.json')) return null;
+    try {
+      return decodeURIComponent(name.slice(APPDATA_FILE_PREFIX.length, -5));
+    } catch (err) {
+      return null;
+    }
+  }
+
+  // ローカルとリモートが実質同じかを比較するための署名。同じなら書き込みを省く
+  function syncSignature(list, pos) {
+    const arr = (list || []).slice().sort((a, b) => ((a.id || '') < (b.id || '') ? -1 : 1));
+    return JSON.stringify({
+      a: arr.map(a => [a.id, a.updatedAt || '', a.deleted ? 1 : 0]),
+      p: pos ? (pos.updatedAt || '') : null
+    });
+  }
+
+  async function loadAppDataIndex(force) {
+    if (appDataFileIndex && !force) return appDataFileIndex;
+    const fields = encodeURIComponent('files(id,name)');
+    const url = `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&fields=${fields}&pageSize=1000`;
+    const data = await driveApiFetch(url);
+    const index = {};
+    (data.files || []).forEach(f => { index[f.name] = f.id; });
+    appDataFileIndex = index;
+    return index;
+  }
+
+  async function appDataDownload(fileId) {
+    const res = await driveFetchWithAuth(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`);
+    if (!res.ok) throw new Error('同期データの取得に失敗しました(status ' + res.status + ')');
+    return res.json();
+  }
+
+  async function appDataUpload(name, fileId, obj, isRetry) {
+    const boundary = 'mdv' + Math.random().toString(36).slice(2);
+    const metadata = fileId ? { name } : { name, parents: ['appDataFolder'] };
+    const body =
+      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n` +
+      JSON.stringify(metadata) +
+      `\r\n--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n` +
+      JSON.stringify(obj) +
+      `\r\n--${boundary}--`;
+    const url = fileId
+      ? `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart&fields=id`
+      : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id';
+    const res = await fetch(url, {
+      method: fileId ? 'PATCH' : 'POST',
+      headers: {
+        Authorization: 'Bearer ' + driveAccessToken,
+        'Content-Type': `multipart/related; boundary=${boundary}`
+      },
+      body
+    });
+    if (res.status === 401 && !isRetry) {
+      driveAccessToken = null;
+      await requestDriveAccessToken();
+      return appDataUpload(name, fileId, obj, true); // 再試行は一度だけ(無限ループ防止)
+    }
+    if (!res.ok) throw new Error('同期データの保存に失敗しました(status ' + res.status + ')');
+    const json = await res.json();
+    return json.id;
+  }
+
+  // 1冊分の同期。必ず pull → マージ → push の順で行う。
+  // 先にpushすると、リモートにある他端末の新しい変更を古いデータで潰してしまう。
+  async function syncBook(bookId) {
+    const index = await loadAppDataIndex();
+    const name = syncFileNameFor(bookId);
+    const fileId = index[name] || null;
+
+    let pulled = false;
+    let remoteSig = null;
+    if (fileId) {
+      const remote = await appDataDownload(fileId);
+      if (remote && typeof remote === 'object') {
+        remoteSig = syncSignature(remote.annotations, remote.readingPosition);
+        const r = mergeAnnotationList(bookId, remote.annotations);
+        if (r.added || r.updated) pulled = true;
+        if (mergeReadingPosition(bookId, remote.readingPosition)) pulled = true;
+      }
+    }
+    if (pulled) {
+      saveAnnotations();
+      saveJSON(READING_POS_V2_KEY, readingPositions);
+    }
+
+    const list = annotations[bookId] || [];
+    const pos = readingPositions[bookId] || null;
+
+    // 安全弁: ローカルが空なのにリモートにデータがある場合は上書きしない。
+    // 削除はtombstoneで残るので、配列が完全に空になるのは異常(データ消失事故)の兆候。
+    if (list.length === 0 && !pos) {
+      return { pulled, pushed: false };
+    }
+    if (fileId && syncSignature(list, pos) === remoteSig) {
+      return { pulled, pushed: false }; // 中身が同じなら書き込まない
+    }
+
+    const newFileId = await appDataUpload(name, fileId, {
+      version: 2,
+      bookId,
+      updatedAt: nowIso(),
+      annotations: list,
+      readingPosition: pos
+    });
+    appDataFileIndex[name] = newFileId;
+    return { pulled, pushed: true };
+  }
+
+  async function ensureSyncToken() {
+    if (driveAccessToken && hasAppDataScope()) return;
+    await requestDriveAccessToken();
+    if (!hasAppDataScope()) {
+      throw new Error('同期に必要な権限(appDataFolder)が許可されませんでした。');
+    }
+  }
+
+  async function runSyncAll() {
+    if (syncInProgress) return;
+    const reason = getDriveUnavailableReason();
+    if (reason) {
+      setSyncStatus(reason, true);
+      return;
+    }
+    syncInProgress = true;
+    btnSyncNow.disabled = true;
+    setSyncStatus('同期中...');
+    try {
+      await ensureSyncToken();
+      const index = await loadAppDataIndex(true);
+      const ids = new Set();
+      Object.keys(annotations).forEach(id => ids.add(id));
+      Object.keys(readingPositions).forEach(id => ids.add(id));
+      Object.keys(index).forEach(name => {
+        const id = bookIdFromSyncFileName(name);
+        if (id) ids.add(id);
+      });
+
+      let pulledCount = 0;
+      let pushedCount = 0;
+      const failed = [];
+      for (const bookId of ids) {
+        try {
+          const r = await syncBook(bookId);
+          if (r.pulled) pulledCount++;
+          if (r.pushed) pushedCount++;
+        } catch (err) {
+          failed.push(bookId);
+        }
+      }
+
+      driveLastSyncAt = nowIso();
+      saveJSON(DRIVE_LAST_SYNC_KEY, driveLastSyncAt);
+      if (currentFile) {
+        rebuildContentLayers();
+        renderBookmarkList();
+      }
+      const summary = `同期しました(${ids.size}冊 / 取得 ${pulledCount} / 送信 ${pushedCount})`;
+      setSyncStatus(failed.length ? summary + ` ※${failed.length}冊は失敗` : summary, failed.length > 0);
+    } catch (err) {
+      setSyncStatus(err.message, true);
+    } finally {
+      syncInProgress = false;
+      btnSyncNow.disabled = false;
+    }
+  }
+
+  // 注釈を変更したら少し待ってから該当の本だけ送る。
+  // トークンが無い間は何もしない(勝手に認証ポップアップを開かないため)。
+  function scheduleSync(bookId) {
+    if (!driveSyncEnabled || !bookId || syncInProgress) return;
+    if (!driveAccessToken || !hasAppDataScope()) return;
+    pendingSyncBooks.add(bookId);
+    clearTimeout(syncPushTimer);
+    syncPushTimer = setTimeout(runPendingSync, SYNC_DEBOUNCE_MS);
+  }
+
+  // 本を開いた直後に、その本だけ裏で同期する。
+  // 読書位置はマージするだけでスクロールはしない(読んでいる最中に画面が飛ぶのを避けるため)。
+  function pullBookInBackground(bookId) {
+    if (!driveSyncEnabled || syncInProgress) return;
+    if (!driveAccessToken || !hasAppDataScope()) return;
+    syncInProgress = true;
+    syncBook(bookId)
+      .then(r => {
+        if (r.pulled && currentFile && currentFile.bookId === bookId) {
+          rebuildContentLayers();
+          renderBookmarkList();
+        }
+      })
+      .catch(() => { /* 裏での同期失敗は読書を妨げないので黙って諦める */ })
+      .finally(() => { syncInProgress = false; });
+  }
+
+  async function runPendingSync() {
+    if (syncInProgress || pendingSyncBooks.size === 0) return;
+    const ids = Array.from(pendingSyncBooks);
+    pendingSyncBooks.clear();
+    syncInProgress = true;
+    try {
+      for (const bookId of ids) {
+        await syncBook(bookId);
+      }
+      driveLastSyncAt = nowIso();
+      saveJSON(DRIVE_LAST_SYNC_KEY, driveLastSyncAt);
+      renderSyncStatus();
+    } catch (err) {
+      setSyncStatus('自動同期に失敗しました: ' + err.message, true);
+    } finally {
+      syncInProgress = false;
+    }
+  }
+
+  driveSyncToggle.addEventListener('change', async () => {
+    if (!driveSyncToggle.checked) {
+      driveSyncEnabled = false;
+      saveJSON(DRIVE_SYNC_ENABLED_KEY, false);
+      renderSyncStatus();
+      return;
+    }
+    const reason = getDriveUnavailableReason();
+    if (reason) {
+      driveSyncToggle.checked = false;
+      setSyncStatus(reason, true);
+      return;
+    }
+    // スコープを広げるため、先にフラグを立ててからトークンを取り直す
+    driveSyncEnabled = true;
+    saveJSON(DRIVE_SYNC_ENABLED_KEY, true);
+    driveAccessToken = null;
+    driveGrantedScopes = '';
+    try {
+      setSyncStatus('Google認証中...');
+      await ensureSyncToken();
+      await runSyncAll();
+    } catch (err) {
+      driveSyncEnabled = false;
+      saveJSON(DRIVE_SYNC_ENABLED_KEY, false);
+      driveSyncToggle.checked = false;
+      setSyncStatus(err.message, true);
+    }
+  });
+
+  btnSyncNow.addEventListener('click', () => {
+    if (!driveSyncEnabled) {
+      setSyncStatus('先に「自動同期する」をオンにしてください。', true);
+      return;
+    }
+    runSyncAll();
   });
 
   // 前回選択したフォルダのハンドルを復元する。読み込み権限が生きていれば自動で再走査し、
@@ -2849,6 +3219,8 @@
     restoreDriveCache();
     recomputeMdFiles();
     renderBookshelf();
+    driveSyncToggle.checked = driveSyncEnabled;
+    renderSyncStatus();
   }
   init();
 })();

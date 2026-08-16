@@ -91,6 +91,25 @@ MVP(§7の1-9)は完了。現在は Phase 3(計画書 §9)。
 - ハイライトの位置も`start`/`end`の文字オフセットで保存し、既存の`resolveAnchor()`で
   本文編集後のズレを補正する(しおりと同じ仕組みをそのまま流用)
 
+## Drive自動同期(P2-2で実装。2026-08-16)
+
+- **appDataFolderに本ごと1ファイル**(`ann-<URIエンコードしたbookId>.json`)。全体を1ファイルにすると
+  端末間の衝突が頻発するため。`spaces=appDataFolder`で一覧を取り、`name → fileId`の索引を作る
+- **スコープは同期をONにした時だけ広げる**。`getCurrentDriveScope()`が`driveSyncEnabled`を見て
+  `drive.readonly`(+`drive.appdata`)を返し、スコープが変わると`initTokenClient`を作り直す。
+  こうしないと、同期を使わないユーザーにまで再同意を強いることになる。原稿への書き込み権限は不要
+- **必ず pull → マージ → push の順**(`syncBook()`)。先にpushすると他端末の新しい変更を
+  古いデータで潰す。マージは`mergeAnnotationList()`/`mergeReadingPosition()`に集約し、
+  バックアップJSONのインポートと**同じ関数**を使う(注釈id単位で`updatedAt`の新しい方を採用)
+- **安全弁**: ローカルの注釈が0件かつ既読位置なしの時は、リモートにデータがあってもpushしない。
+  削除はtombstoneで残るので配列が完全に空になるのは異常(データ消失事故)の兆候
+- **署名比較でムダな書き込みを省く**(`syncSignature()`。id+updatedAt+deletedの一覧を比較)
+- **自動同期はトークンがある間だけ**。`scheduleSync()`は`driveAccessToken`が無ければ何もしない
+  (認証ポップアップはユーザー操作起点でないとブラウザにブロックされるため)。
+  変更時はdebounce 6秒でpush、本を開いた時は`pullBookInBackground()`が裏でpull
+- `syncInProgress`フラグで、マージ時の`saveAnnotations()`がまた同期を予約する再帰を防ぐ
+- 既読位置はpullでマージするが**スクロールはしない**(読書中に画面が飛ぶのを避けるため)
+
 ## 既知の制約と技術的負債
 
 - Drive連携は`https://`オリジン必須。ローカルの`index.html`を直接開いた場合、Driveパネルが理由と公開版URLを案内する
@@ -107,7 +126,7 @@ MVP(§7の1-9)は完了。現在は Phase 3(計画書 §9)。
 - ~~P1-1 フォルダ/ファイルハンドルの永続化 + 「読書中」本棚~~ → **完了(2026-08-16)**
 - ~~P1-2 モバイルUI再構成~~ → **完了(2026-08-16)**
 - ~~P2-1 ハイライト + メモ~~ → **完了(2026-08-16)**
-- P2-2 Drive `appDataFolder` による自動同期(`bookId`・tombstone・マージ処理は実装済み)
+- ~~P2-2 Drive `appDataFolder` による自動同期~~ → **完了(2026-08-16)**
 - P3 `marked`自己ホスト + PWA化(オフライン読書)、注釈データのIndexedDB移行
 
 ## 未決定事項(実装しながら判断)
