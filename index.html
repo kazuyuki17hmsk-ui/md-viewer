@@ -776,6 +776,11 @@
     border-left: 4px solid var(--border);
     color: #555;
   }
+  /* 空行なしで連続する引用行(脚注【注1】【注2】…等)はMarkdown上1つの段落に結合されるため、
+     改行だけは保持して見た目でも1行=1項目に分かれるようにする(実際の翻訳原稿で確認) */
+  #viewer-content blockquote p {
+    white-space: pre-line;
+  }
   #viewer-content code {
     background: rgba(107, 79, 59, 0.1);
     padding: 0.15em 0.4em;
