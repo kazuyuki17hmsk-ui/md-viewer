@@ -40,24 +40,31 @@ MVP(§7の1-9)は完了。現在は Phase 3(計画書 §9)。
 - ビルドツール・パッケージマネージャは現状不要(単一HTMLファイルのため)
 - **公開先**: GitHub Pages https://kazuyuki17hmsk-ui.github.io/md-viewer/ (リポジトリ: https://github.com/kazuyuki17hmsk-ui/md-viewer 、パブリック。アプリコードのみを含み翻訳原稿本体は含めない)
 
+## データモデル(P0-2で刷新。2026-08-16)
+
+- **`bookId`**: ファイル名を正規化した安定ID(`makeBookId()`)。読み込み経路(fs/idb/drive)が違っても同じ本として扱う。`relPath`は表示・ソート用にのみ残す
+- **位置は文字オフセット**: 本文プレーンテキスト先頭からの文字数で保存。フォントサイズ・画面幅・端末が変わってもズレない
+- **注釈(annotation)モデル**: しおり・メモ・(将来の)ハイライトを1モデルに統合。`{ id, bookId, type, start, end, quote, prefix, suffix, color, note, createdAt, updatedAt, deleted }`。削除は物理削除せず`deleted`フラグ(tombstone)
+- **localStorageキー**: `mdViewer.annotations` / `mdViewer.readingPositions.v2` / `mdViewer.migratedBooks`。旧キー(`mdViewer.bookmarks`, `mdViewer.readingPositions`)は**読み取り専用で残す**(ロールバック用)
+- **遅延マイグレーション**: 本を開いた時に旧px位置を実測して文字オフセットへ変換(`migrateLegacyBook()`)。`migratedBooks`で二重変換を防ぐ
+- **バックアップはマージ方式**: 注釈`id`単位で`updatedAt`の新しい方を採用。version 1(旧形式)のJSONは旧キーへ取り込み、次回オープン時に自動変換される
+
 ## 既知の制約と技術的負債
 
 - Drive連携は`https://`オリジン必須。ローカルの`index.html`を直接開いた場合、Driveパネルが理由と公開版URLを案内する
-- 既読位置・しおりが`viewerContent.scrollTop`(px)保存 → フォントサイズ変更・端末間でズレる。文字オフセットへの移行が必要
-- 本の識別子が`relPath`で読み込み経路(fs/idb/drive)ごとに変わる → 同じ本でもしおりが紐づかない。安定した`bookId`が必要
-- バックアップJSONのインポートが全上書き → 端末間同期では相手の変更を失う。マージ方式が必要
 - `marked.js`がCDN依存 → オフライン不可。PWA化には自己ホストが前提
-- 注釈データがlocalStorage依存(5MB上限)。`saveJSON()`が例外を握っていないため上限超過時にサイレント失敗する
+- 注釈データがlocalStorage依存(5MB上限)。超過時は`saveJSON()`が警告を出す(P3でIndexedDBへ移行予定)
+- `marked.parse()`の結果を無サニタイズで`innerHTML`に入れている(自分の原稿のみなら実害は低い)
 
 ## 次の優先順位
 
 詳細は @docs/md_viewer_development_plan.md §9 を参照。
 
-- P0-2 データモデル刷新(bookId統一 + 位置の文字オフセット化 + 注釈モデル統合)← **後続すべての土台**
+- ~~P0-2 データモデル刷新~~ → **完了(2026-08-16)**
 - P1-1 フォルダ/ファイルハンドルの永続化 + 「読書中」本棚
 - P1-2 モバイルUI再構成(本文タップでUIトグル + ボトムバー + パネルのオーバーレイ化)
-- P2-1 ハイライト + メモ
-- P2-2 Drive `appDataFolder` による自動同期
+- P2-1 ハイライト + メモ(`start`/`end`と再アンカーの土台は実装済み。レイヤー再構築関数が要る)
+- P2-2 Drive `appDataFolder` による自動同期(`bookId`・tombstone・マージ処理は実装済み)
 - P3 `marked`自己ホスト + PWA化(オフライン読書)、注釈データのIndexedDB移行
 
 ## 未決定事項(実装しながら判断)
