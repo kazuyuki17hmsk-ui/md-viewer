@@ -15,6 +15,7 @@ Kindleライクな読書体験でMarkdownファイル(翻訳原稿・研究ノ�
 ## 実装ステップと進捗
 
 計画書 §7 のステップに対応。完了したら `[x]` に更新すること。
+MVP(§7の1-9)は完了。現在は Phase 3(計画書 §9)。
 
 - [x] 1. 基本UI(本棚一覧画面 + ビューア画面)の骨格
 - [x] 2. Chromebook向けフォルダ読み込み(File System Access API)
@@ -30,7 +31,7 @@ Kindleライクな読書体験でMarkdownファイル(翻訳原稿・研究ノ�
 
 - 目次(TOC): 見出し一覧パネルからジャンプ
 - 選択テキストから文中検索へのジャンプ(同じ語句の別出現箇所へワンクリック移動。脚注参照等で活用)
-- Google Drive連携: OAuth 2.0(Client ID: Google Cloud Console発行済み)経由でDrive上の`.md`をフォルダ単位で直接参照。`https://`オリジンが必須のためfile://では動作しない
+- Google Drive連携: OAuth 2.0(Client ID: Google Cloud Console発行済み)経由でDrive上の`.md`をフォルダ単位で直接参照。`https://`オリジンが必須のためfile://では動作しない。file://の事前判定・`error_callback`・120秒タイムアウト・401自動リトライを実装済み(2026-08-16)
 
 ## 開発環境
 
@@ -38,6 +39,26 @@ Kindleライクな読書体験でMarkdownファイル(翻訳原稿・研究ノ�
 - 動作確認は主にChromeブラウザで手動確認(自動テストは現状未整備)。Google Drive連携等の実機依存機能はスマホ実機で確認
 - ビルドツール・パッケージマネージャは現状不要(単一HTMLファイルのため)
 - **公開先**: GitHub Pages https://kazuyuki17hmsk-ui.github.io/md-viewer/ (リポジトリ: https://github.com/kazuyuki17hmsk-ui/md-viewer 、パブリック。アプリコードのみを含み翻訳原稿本体は含めない)
+
+## 既知の制約と技術的負債
+
+- Drive連携は`https://`オリジン必須。ローカルの`index.html`を直接開いた場合、Driveパネルが理由と公開版URLを案内する
+- 既読位置・しおりが`viewerContent.scrollTop`(px)保存 → フォントサイズ変更・端末間でズレる。文字オフセットへの移行が必要
+- 本の識別子が`relPath`で読み込み経路(fs/idb/drive)ごとに変わる → 同じ本でもしおりが紐づかない。安定した`bookId`が必要
+- バックアップJSONのインポートが全上書き → 端末間同期では相手の変更を失う。マージ方式が必要
+- `marked.js`がCDN依存 → オフライン不可。PWA化には自己ホストが前提
+- 注釈データがlocalStorage依存(5MB上限)。`saveJSON()`が例外を握っていないため上限超過時にサイレント失敗する
+
+## 次の優先順位
+
+詳細は @docs/md_viewer_development_plan.md §9 を参照。
+
+- P0-2 データモデル刷新(bookId統一 + 位置の文字オフセット化 + 注釈モデル統合)← **後続すべての土台**
+- P1-1 フォルダ/ファイルハンドルの永続化 + 「読書中」本棚
+- P1-2 モバイルUI再構成(本文タップでUIトグル + ボトムバー + パネルのオーバーレイ化)
+- P2-1 ハイライト + メモ
+- P2-2 Drive `appDataFolder` による自動同期
+- P3 `marked`自己ホスト + PWA化(オフライン読書)、注釈データのIndexedDB移行
 
 ## 未決定事項(実装しながら判断)
 
