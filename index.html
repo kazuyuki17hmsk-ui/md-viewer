@@ -87,11 +87,45 @@
   /* 本棚一覧画面 */
   #bookshelf-list {
     padding: 16px;
+  }
+  .bookshelf-section {
+    margin-bottom: 28px;
+  }
+  .bookshelf-section-title {
+    font-size: 0.95rem;
+    font-weight: bold;
+    color: var(--accent);
+    margin: 0 0 10px;
+  }
+  .book-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
     gap: 12px;
   }
+  /* フォルダの再読み込み許可を促すバナー */
+  .fs-permission-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    background: rgba(107, 79, 59, 0.08);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin-bottom: 16px;
+    font-size: 0.9rem;
+  }
+  .fs-permission-banner button {
+    flex: 0 0 auto;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 6px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
   .book-item {
+    position: relative;
     background: #fff;
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -108,8 +142,27 @@
     color: #999;
     margin-top: 4px;
   }
-  .book-item-delete {
+  .book-item-actions {
+    display: flex;
+    justify-content: center;
+    gap: 6px;
     margin-top: 8px;
+  }
+  .book-item-pin {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--accent);
+    font-size: 0.75rem;
+    padding: 2px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .book-item-pin.pinned {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+  .book-item-delete {
     background: none;
     border: 1px solid var(--border);
     color: #a33;
@@ -226,6 +279,37 @@
     border: none;
     padding: 8px 14px;
     border-radius: 4px;
+    cursor: pointer;
+  }
+  /* 前回読み込んだDriveフォルダへのショートカット */
+  .drive-last-folder {
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    background: rgba(107, 79, 59, 0.08);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 12px;
+    margin-bottom: 12px;
+    font-size: 0.85rem;
+  }
+  .drive-last-folder.open {
+    display: flex;
+  }
+  .drive-last-folder-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .drive-last-folder button {
+    flex: 0 0 auto;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-size: 0.85rem;
     cursor: pointer;
   }
   .empty-state {
@@ -502,6 +586,7 @@
     </header>
     <div id="drive-panel" class="drive-panel">
       <div id="drive-message" class="drive-message"></div>
+      <div id="drive-last-folder" class="drive-last-folder"></div>
       <div id="drive-breadcrumb" class="drive-breadcrumb"></div>
       <ul id="drive-folder-list"></ul>
       <div id="drive-actions" class="drive-actions">
@@ -607,6 +692,7 @@
   const driveFolderListEl = document.getElementById('drive-folder-list');
   const driveActionsEl = document.getElementById('drive-actions');
   const btnDriveLoadHere = document.getElementById('btn-drive-load-here');
+  const driveLastFolderEl = document.getElementById('drive-last-folder');
 
   // mdFiles の各要素: { name, bookId, relPath, source: 'fs' | 'idb' | 'drive', handle?, id?, content?, fileId? }
   let mdFiles = [];
@@ -614,6 +700,12 @@
   let idbFilesList = []; // IndexedDBにインポート済みのファイル(永続)
   let driveFiles = []; // Google Driveから読み込んだファイル(セッション限り)
   let currentFile = null; // 現在ビューアで開いているファイル
+
+  // フォルダハンドルの永続化(fs)。毎回フォルダを選び直さずに済むよう、
+  // 選択したフォルダのハンドルをIndexedDBに保存し、起動時に読み込み権限があれば自動で再走査する。
+  let fsDirHandle = null;
+  let fsDirName = '';
+  let fsPermissionState = null; // 'granted' | 'prompt' | 'denied' | null(未保存)
 
   // 本の識別子。読み込み経路(fs/idb/drive)によって relPath は変わるため、
   // しおり・既読位置はファイル名から作った安定したIDで紐づける。
@@ -626,10 +718,12 @@
     mdFiles = [...fsFiles, ...idbFilesList, ...driveFiles].sort((a, b) => a.relPath.localeCompare(b.relPath, 'ja'));
   }
 
-  // スマホ向けファイルインポートの永続化(IndexedDB)
+  // スマホ向けファイルインポートの永続化 + フォルダハンドルの永続化(IndexedDB)
   const IDB_NAME = 'mdViewerDB';
-  const IDB_VERSION = 1;
+  const IDB_VERSION = 2;
   const IDB_STORE = 'files';
+  const IDB_HANDLE_STORE = 'dirHandles'; // FileSystemDirectoryHandle はstructured clone可なのでそのまま保存できる
+  const IDB_HANDLE_ID = 'root'; // 現状は1フォルダのみ選択可能なため固定キー
 
   function openIdb() {
     return new Promise((resolve, reject) => {
@@ -638,6 +732,9 @@
         const db = req.result;
         if (!db.objectStoreNames.contains(IDB_STORE)) {
           db.createObjectStore(IDB_STORE, { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains(IDB_HANDLE_STORE)) {
+          db.createObjectStore(IDB_HANDLE_STORE, { keyPath: 'id' });
         }
       };
       req.onsuccess = () => resolve(req.result);
@@ -672,6 +769,36 @@
     return new Promise((resolve, reject) => {
       const tx = db.transaction(IDB_STORE, 'readwrite');
       tx.objectStore(IDB_STORE).delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async function idbSaveDirHandle(handle, name) {
+    const db = await openIdb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_HANDLE_STORE, 'readwrite');
+      tx.objectStore(IDB_HANDLE_STORE).put({ id: IDB_HANDLE_ID, handle, name, savedAt: new Date().toISOString() });
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async function idbGetDirHandle() {
+    const db = await openIdb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_HANDLE_STORE, 'readonly');
+      const req = tx.objectStore(IDB_HANDLE_STORE).get(IDB_HANDLE_ID);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function idbClearDirHandle() {
+    const db = await openIdb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_HANDLE_STORE, 'readwrite');
+      tx.objectStore(IDB_HANDLE_STORE).delete(IDB_HANDLE_ID);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
@@ -915,6 +1042,8 @@
     clearDriveMessage();
     driveBreadcrumbEl.innerHTML = '';
     driveFolderListEl.innerHTML = '';
+    driveLastFolderEl.classList.remove('open');
+    driveLastFolderEl.innerHTML = '';
 
     // https:// でないオリジンでは認証ポップアップが必ず失敗するので、開く前に案内だけ出す
     const unavailable = getDriveUnavailableReason();
@@ -923,6 +1052,7 @@
       showDriveMessage(unavailable, { showPublishedLink: location.protocol === 'file:' });
       return;
     }
+    renderDriveLastFolderHint(); // 認証前でもlocalStorageのキャッシュからすぐ表示できる
 
     driveActionsEl.style.display = '';
     driveFolderListEl.innerHTML = '<li class="drive-empty">Google認証中...</li>';
@@ -946,14 +1076,19 @@
     }
   });
 
+  async function loadDriveFolder(folderId, path) {
+    driveFiles = await scanDriveFolder(folderId, '');
+    recomputeMdFiles();
+    renderBookshelf();
+    saveDriveCache(folderId, path, driveFiles);
+  }
+
   btnDriveLoadHere.addEventListener('click', async () => {
     btnDriveLoadHere.disabled = true;
     const originalLabel = btnDriveLoadHere.textContent;
     btnDriveLoadHere.textContent = '読み込み中...';
     try {
-      driveFiles = await scanDriveFolder(driveCurrentFolderId, '');
-      recomputeMdFiles();
-      renderBookshelf();
+      await loadDriveFolder(driveCurrentFolderId, driveCurrentPath);
       drivePanel.classList.remove('open');
     } catch (err) {
       alert('Driveからの読み込みに失敗しました: ' + err.message);
@@ -962,6 +1097,66 @@
       btnDriveLoadHere.textContent = originalLabel;
     }
   });
+
+  // 前回読み込んだDriveフォルダをlocalStorageにキャッシュしておく。
+  // ファイル一覧(name/fileId等のメタデータのみ、本文は含まない)を保存し、
+  // 起動時にそのまま本棚へ復元することで、Driveの認証なしでも一覧が見える。
+  // ファイルを開く時だけ、既存のトークン取得フロー(driveFetchWithAuth)が自動で認証する。
+  const DRIVE_CACHE_KEY = 'mdViewer.driveCache';
+
+  function saveDriveCache(folderId, path, files) {
+    const cache = {
+      folderId,
+      path,
+      files: files.map(f => ({ name: f.name, bookId: f.bookId, relPath: f.relPath, fileId: f.fileId })),
+      updatedAt: nowIso()
+    };
+    saveJSON(DRIVE_CACHE_KEY, cache);
+  }
+
+  function loadDriveCache() {
+    return loadJSON(DRIVE_CACHE_KEY, null);
+  }
+
+  function restoreDriveCache() {
+    const cache = loadDriveCache();
+    if (!cache || !Array.isArray(cache.files)) return;
+    driveFiles = cache.files.map(f => ({ ...f, source: 'drive' }));
+  }
+
+  function renderDriveLastFolderHint() {
+    const cache = loadDriveCache();
+    if (!cache || !Array.isArray(cache.path) || cache.path.length === 0) {
+      driveLastFolderEl.classList.remove('open');
+      driveLastFolderEl.innerHTML = '';
+      return;
+    }
+    const pathLabel = cache.path.map(seg => seg.name).join(' / ');
+    driveLastFolderEl.innerHTML = '';
+    const label = document.createElement('div');
+    label.className = 'drive-last-folder-label';
+    label.textContent = '前回: ' + pathLabel + '(' + cache.files.length + '件)';
+    driveLastFolderEl.appendChild(label);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = '更新';
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      const original = btn.textContent;
+      btn.textContent = '読み込み中...';
+      try {
+        await loadDriveFolder(cache.folderId, cache.path);
+        drivePanel.classList.remove('open');
+      } catch (err) {
+        alert('Driveからの読み込みに失敗しました: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    });
+    driveLastFolderEl.appendChild(btn);
+    driveLastFolderEl.classList.add('open');
+  }
 
   // しおり・既読位置の永続化(localStorage)
   // 位置は「本文プレーンテキスト先頭からの文字オフセット」で保存する。
@@ -1004,6 +1199,28 @@
   let annotations = loadJSON(ANNOTATIONS_KEY, {});         // { bookId: [annotation] }
   let readingPositions = loadJSON(READING_POS_V2_KEY, {}); // { bookId: { offset, updatedAt } }
   let migratedBooks = loadJSON(MIGRATED_BOOKS_KEY, {});    // { bookId: ISO日時 }
+
+  // 「読書中」本棚。端末ローカルの閲覧履歴・ピン留めなので、バックアップJSONには含めない
+  // (削除の同期にtombstoneが必要になるほどのデータではないため)。
+  const PINNED_BOOKS_KEY = 'mdViewer.pinnedBooks';
+  const LAST_OPENED_KEY = 'mdViewer.lastOpenedAt';
+  const RECENT_BOOKS_LIMIT = 5;
+
+  let pinnedBooks = loadJSON(PINNED_BOOKS_KEY, {});  // { bookId: ISO日時(ピン留めした時刻) }
+  let lastOpenedAt = loadJSON(LAST_OPENED_KEY, {});  // { bookId: ISO日時 }
+
+  function isPinned(bookId) {
+    return !!pinnedBooks[bookId];
+  }
+  function togglePin(bookId) {
+    if (pinnedBooks[bookId]) {
+      delete pinnedBooks[bookId];
+    } else {
+      pinnedBooks[bookId] = nowIso();
+    }
+    saveJSON(PINNED_BOOKS_KEY, pinnedBooks);
+    renderBookshelf();
+  }
 
   function newId() {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -1611,6 +1828,8 @@
 
   async function openViewer(file) {
     currentFile = file;
+    lastOpenedAt[file.bookId] = nowIso();
+    saveJSON(LAST_OPENED_KEY, lastOpenedAt);
     viewerTitle.textContent = file.name;
     viewerContent.textContent = '読み込み中...';
     bookmarkPanel.classList.remove('open');
@@ -1651,6 +1870,7 @@
     flushReadingPosition();
     hideSelectionButton();
     showScreen(screenBookshelf);
+    renderBookshelf(); // 「最近読んだ」に今開いた本を反映する
   });
 
   // ディレクトリを再帰的に走査し、.mdファイルのハンドルを集める
@@ -1668,8 +1888,120 @@
     return results;
   }
 
+  function createBookItem(file) {
+    const item = document.createElement('div');
+    item.className = 'book-item';
+    item.title = file.relPath;
+    item.addEventListener('click', () => openViewer(file));
+
+    const nameEl = document.createElement('div');
+    nameEl.textContent = file.name;
+    item.appendChild(nameEl);
+
+    if (file.source === 'idb') {
+      const sourceEl = document.createElement('div');
+      sourceEl.className = 'book-item-source';
+      sourceEl.textContent = 'インポート';
+      item.appendChild(sourceEl);
+    } else if (file.source === 'drive') {
+      const sourceEl = document.createElement('div');
+      sourceEl.className = 'book-item-source';
+      sourceEl.textContent = 'Drive';
+      item.appendChild(sourceEl);
+    } else if (file.source === 'fs') {
+      const sourceEl = document.createElement('div');
+      sourceEl.className = 'book-item-source';
+      sourceEl.textContent = 'フォルダ';
+      item.appendChild(sourceEl);
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'book-item-actions';
+
+    const pinBtn = document.createElement('button');
+    pinBtn.className = 'book-item-pin' + (isPinned(file.bookId) ? ' pinned' : '');
+    pinBtn.type = 'button';
+    pinBtn.textContent = isPinned(file.bookId) ? '読書中 解除' : '読書中にする';
+    pinBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      togglePin(file.bookId);
+    });
+    actions.appendChild(pinBtn);
+
+    if (file.source === 'idb') {
+      const delBtn = document.createElement('button');
+      delBtn.className = 'book-item-delete';
+      delBtn.type = 'button';
+      delBtn.textContent = '削除';
+      delBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await idbDeleteFile(file.id);
+        idbFilesList = idbFilesList.filter(f => f.id !== file.id);
+        recomputeMdFiles();
+        renderBookshelf();
+      });
+      actions.appendChild(delBtn);
+    }
+
+    item.appendChild(actions);
+    return item;
+  }
+
+  function renderBookGrid(container, files) {
+    const grid = document.createElement('div');
+    grid.className = 'book-grid';
+    files.forEach(file => grid.appendChild(createBookItem(file)));
+    container.appendChild(grid);
+  }
+
+  function renderBookshelfSection(container, title, files) {
+    if (files.length === 0) return;
+    const section = document.createElement('div');
+    section.className = 'bookshelf-section';
+    const heading = document.createElement('div');
+    heading.className = 'bookshelf-section-title';
+    heading.textContent = title;
+    section.appendChild(heading);
+    renderBookGrid(section, files);
+    container.appendChild(section);
+  }
+
+  // フォルダの再読み込み許可を促すバナー(fsハンドルはあるが読み込み権限が失効している場合)
+  function renderFsPermissionBanner(container) {
+    if (!fsDirHandle || fsPermissionState === 'granted') return;
+    const banner = document.createElement('div');
+    banner.className = 'fs-permission-banner';
+    const label = document.createElement('div');
+    label.textContent = '前回のフォルダ「' + fsDirName + '」を読み込むには許可が必要です。';
+    banner.appendChild(label);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = '許可する';
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try {
+        const perm = await fsDirHandle.requestPermission({ mode: 'read' });
+        fsPermissionState = perm;
+        if (perm === 'granted') {
+          fsFiles = await scanDirectory(fsDirHandle, '');
+          recomputeMdFiles();
+        } else {
+          alert('読み込みが許可されませんでした。「フォルダ」ボタンから選び直してください。');
+        }
+      } catch (err) {
+        alert('許可の取得に失敗しました: ' + err.message);
+      } finally {
+        renderBookshelf();
+      }
+    });
+    banner.appendChild(btn);
+    container.appendChild(banner);
+  }
+
   function renderBookshelf() {
     bookshelfList.innerHTML = '';
+    renderFsPermissionBanner(bookshelfList);
+
     if (mdFiles.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'empty-state';
@@ -1677,43 +2009,28 @@
       bookshelfList.appendChild(empty);
       return;
     }
-    mdFiles.forEach(file => {
-      const item = document.createElement('div');
-      item.className = 'book-item';
-      item.title = file.relPath;
-      item.addEventListener('click', () => openViewer(file));
 
-      const nameEl = document.createElement('div');
-      nameEl.textContent = file.name;
-      item.appendChild(nameEl);
-
-      if (file.source === 'idb') {
-        const sourceEl = document.createElement('div');
-        sourceEl.className = 'book-item-source';
-        sourceEl.textContent = 'インポート';
-        item.appendChild(sourceEl);
-
-        const delBtn = document.createElement('button');
-        delBtn.className = 'book-item-delete';
-        delBtn.type = 'button';
-        delBtn.textContent = '削除';
-        delBtn.addEventListener('click', async (e) => {
-          e.stopPropagation();
-          await idbDeleteFile(file.id);
-          idbFilesList = idbFilesList.filter(f => f.id !== file.id);
-          recomputeMdFiles();
-          renderBookshelf();
-        });
-        item.appendChild(delBtn);
-      } else if (file.source === 'drive') {
-        const sourceEl = document.createElement('div');
-        sourceEl.className = 'book-item-source';
-        sourceEl.textContent = 'Drive';
-        item.appendChild(sourceEl);
-      }
-
-      bookshelfList.appendChild(item);
+    // 読書中(ピン留め)・最近読んだ には、bookIdが重複するエントリ(同じ本を複数経路で
+    // 読み込んでいる場合)を1つにまとめて出す。「すべて」は経路ごとの実体をそのまま出す。
+    const seen = new Set();
+    const uniqueByBookId = mdFiles.filter(f => {
+      if (seen.has(f.bookId)) return false;
+      seen.add(f.bookId);
+      return true;
     });
+
+    const pinned = uniqueByBookId
+      .filter(f => isPinned(f.bookId))
+      .sort((a, b) => (pinnedBooks[b.bookId] || '').localeCompare(pinnedBooks[a.bookId] || ''));
+
+    const recent = uniqueByBookId
+      .filter(f => !isPinned(f.bookId) && lastOpenedAt[f.bookId])
+      .sort((a, b) => (lastOpenedAt[b.bookId] || '').localeCompare(lastOpenedAt[a.bookId] || ''))
+      .slice(0, RECENT_BOOKS_LIMIT);
+
+    renderBookshelfSection(bookshelfList, '読書中', pinned);
+    renderBookshelfSection(bookshelfList, '最近読んだ', recent);
+    renderBookshelfSection(bookshelfList, 'すべて', mdFiles);
   }
 
   btnOpenFolder.addEventListener('click', async () => {
@@ -1730,8 +2047,16 @@
       bookshelfList.appendChild(loading);
 
       fsFiles = await scanDirectory(dirHandle, '');
+      fsDirHandle = dirHandle;
+      fsDirName = dirHandle.name;
+      fsPermissionState = 'granted';
       recomputeMdFiles();
       renderBookshelf();
+      try {
+        await idbSaveDirHandle(dirHandle, dirHandle.name);
+      } catch (err) {
+        // ハンドル保存に失敗しても今回のセッションでの閲覧自体は継続できるので握りつぶす
+      }
     } catch (err) {
       if (err.name !== 'AbortError') {
         alert('フォルダの読み込みに失敗しました: ' + err.message);
@@ -1897,6 +2222,29 @@
     backupImportInput.value = '';
   });
 
+  // 前回選択したフォルダのハンドルを復元する。読み込み権限が生きていれば自動で再走査し、
+  // 失効していれば renderBookshelf() が案内バナーを出す(requestPermissionはユーザー操作起点でしか呼べないため)。
+  async function restoreFsHandle() {
+    try {
+      const rec = await idbGetDirHandle();
+      if (!rec || !rec.handle) return;
+      fsDirHandle = rec.handle;
+      fsDirName = rec.name || '';
+      if (typeof fsDirHandle.queryPermission !== 'function') {
+        fsPermissionState = 'prompt';
+        return;
+      }
+      fsPermissionState = await fsDirHandle.queryPermission({ mode: 'read' });
+      if (fsPermissionState === 'granted') {
+        fsFiles = await scanDirectory(fsDirHandle, '');
+      }
+    } catch (err) {
+      // ハンドルが壊れている(フォルダが削除された等)場合は諦めて次回選び直してもらう
+      fsDirHandle = null;
+      fsPermissionState = null;
+    }
+  }
+
   async function init() {
     try {
       const records = await idbGetAllFiles();
@@ -1904,6 +2252,8 @@
     } catch (err) {
       idbFilesList = [];
     }
+    await restoreFsHandle();
+    restoreDriveCache();
     recomputeMdFiles();
     renderBookshelf();
   }

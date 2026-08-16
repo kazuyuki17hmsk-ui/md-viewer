@@ -49,19 +49,27 @@ MVP(§7の1-9)は完了。現在は Phase 3(計画書 §9)。
 - **遅延マイグレーション**: 本を開いた時に旧px位置を実測して文字オフセットへ変換(`migrateLegacyBook()`)。`migratedBooks`で二重変換を防ぐ
 - **バックアップはマージ方式**: 注釈`id`単位で`updatedAt`の新しい方を採用。version 1(旧形式)のJSONは旧キーへ取り込み、次回オープン時に自動変換される
 
+## ハンドル永続化 + 「読書中」本棚(P1-1で実装。2026-08-16)
+
+- **fsハンドル**: `FileSystemDirectoryHandle`をIndexedDB(`dirHandles`ストア)に保存。起動時に`queryPermission({mode:'read'})`を確認し、許可済みなら自動再走査。失効時は本棚に案内バナーを出し、ボタン押下(ユーザー操作起点)で`requestPermission()`を呼ぶ
+- **Driveキャッシュ**: 最後に読み込んだDriveフォルダのファイル一覧(メタデータのみ)を`mdViewer.driveCache`に保存し、起動時に認証なしで本棚へ復元。ファイルを開く時だけ既存の`driveFetchWithAuth`が遅延認証する。Driveパネルにも「前回のフォルダ」から直接更新できるショートカットを表示
+- **本棚セクション**: 「読書中(ピン留め)」「最近読んだ(直近5件)」「すべて」に分割。ピン留め状態は`mdViewer.pinnedBooks`、閲覧日時は`mdViewer.lastOpenedAt`(ともに端末ローカル・バックアップJSON対象外)
+- 「戻る」ボタンで本棚に戻る際に`renderBookshelf()`を呼び直し、直前に開いた本を「最近読んだ」へ反映する
+
 ## 既知の制約と技術的負債
 
 - Drive連携は`https://`オリジン必須。ローカルの`index.html`を直接開いた場合、Driveパネルが理由と公開版URLを案内する
 - `marked.js`がCDN依存 → オフライン不可。PWA化には自己ホストが前提
 - 注釈データがlocalStorage依存(5MB上限)。超過時は`saveJSON()`が警告を出す(P3でIndexedDBへ移行予定)
 - `marked.parse()`の結果を無サニタイズで`innerHTML`に入れている(自分の原稿のみなら実害は低い)
+- ピン留め・最近読んだはバックアップJSON/Drive同期の対象外(端末ローカルの閲覧履歴のため)
 
 ## 次の優先順位
 
 詳細は @docs/md_viewer_development_plan.md §9 を参照。
 
 - ~~P0-2 データモデル刷新~~ → **完了(2026-08-16)**
-- P1-1 フォルダ/ファイルハンドルの永続化 + 「読書中」本棚
+- ~~P1-1 フォルダ/ファイルハンドルの永続化 + 「読書中」本棚~~ → **完了(2026-08-16)**
 - P1-2 モバイルUI再構成(本文タップでUIトグル + ボトムバー + パネルのオーバーレイ化)
 - P2-1 ハイライト + メモ(`start`/`end`と再アンカーの土台は実装済み。レイヤー再構築関数が要る)
 - P2-2 Drive `appDataFolder` による自動同期(`bookId`・tombstone・マージ処理は実装済み)
