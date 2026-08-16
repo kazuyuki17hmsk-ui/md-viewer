@@ -200,6 +200,34 @@
     opacity: 0.6;
     cursor: default;
   }
+  /* Drive連携のエラー・案内表示 */
+  .drive-message {
+    display: none;
+    font-size: 0.9rem;
+    color: #a33;
+    line-height: 1.6;
+  }
+  .drive-message.open {
+    display: block;
+  }
+  .drive-message p {
+    margin: 0 0 8px;
+  }
+  .drive-message a {
+    display: inline-block;
+    color: var(--accent);
+    word-break: break-all;
+  }
+  .drive-message .drive-retry {
+    display: inline-block;
+    margin-top: 8px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 8px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
   .empty-state {
     padding: 40px 16px;
     text-align: center;
@@ -473,9 +501,10 @@
       </div>
     </header>
     <div id="drive-panel" class="drive-panel">
+      <div id="drive-message" class="drive-message"></div>
       <div id="drive-breadcrumb" class="drive-breadcrumb"></div>
       <ul id="drive-folder-list"></ul>
-      <div class="drive-actions">
+      <div id="drive-actions" class="drive-actions">
         <button id="btn-drive-load-here" type="button">このフォルダを読み込む</button>
       </div>
     </div>
@@ -573,8 +602,10 @@
   const backupImportInput = document.getElementById('backup-import-input');
   const btnDriveOpen = document.getElementById('btn-drive-open');
   const drivePanel = document.getElementById('drive-panel');
+  const driveMessageEl = document.getElementById('drive-message');
   const driveBreadcrumbEl = document.getElementById('drive-breadcrumb');
   const driveFolderListEl = document.getElementById('drive-folder-list');
+  const driveActionsEl = document.getElementById('drive-actions');
   const btnDriveLoadHere = document.getElementById('btn-drive-load-here');
 
   // mdFiles の各要素: { name, relPath, source: 'fs' | 'idb' | 'drive', handle?, id?, content?, fileId? }
@@ -642,11 +673,24 @@
   // Google Drive連携
   const GOOGLE_CLIENT_ID = '179784899748-ckb2osf9m7akhmd92cltfsls5mj25dac.apps.googleusercontent.com';
   const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
+  const PUBLISHED_APP_URL = 'https://kazuyuki17hmsk-ui.github.io/md-viewer/';
+  const DRIVE_AUTH_TIMEOUT_MS = 120000;
 
   let driveAccessToken = null;
   let driveTokenClient = null;
   let driveCurrentFolderId = 'root';
   let driveCurrentPath = [{ id: 'root', name: 'マイドライブ' }];
+
+  // GoogleのOAuthは https:// か localhost のオリジンしか受け付けない。
+  // file:// で開いた場合はポップアップが「エラー400: invalid_request」で止まるため、事前に弾いて案内する。
+  function getDriveUnavailableReason() {
+    if (location.protocol === 'https:') return null;
+    if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') return null;
+    if (location.protocol === 'file:') {
+      return 'このページを file:// で開いているため、Google Drive連携は利用できません(Googleの仕様で https:// のオリジンが必須です)。下のリンクから公開版を開いてお使いください。';
+    }
+    return '現在のURL(' + location.protocol + '//' + location.host + ')ではGoogle Drive連携を利用できません。https:// のページからアクセスしてください。';
+  }
 
   function getDriveTokenClient() {
     if (driveTokenClient) return driveTokenClient;
@@ -659,30 +703,76 @@
     return driveTokenClient;
   }
 
+  // GISはポップアップが開けなかった場合などにcallbackではなくerror_callbackを呼ぶ。
+  // これを設定しないとPromiseが永久に未解決のままになり、画面が「認証中...」で固まる。
+  function describeDriveAuthError(err) {
+    const type = err && err.type;
+    if (type === 'popup_failed_to_open') {
+      return 'Google認証のポップアップを開けませんでした。ポップアップのブロックを解除して、もう一度お試しください。';
+    }
+    if (type === 'popup_closed') {
+      return 'Google認証のウィンドウが閉じられました。もう一度お試しください。';
+    }
+    return 'Google認証に失敗しました' + (type ? '(' + type + ')' : '') + '。';
+  }
+
   function requestDriveAccessToken() {
     return new Promise((resolve, reject) => {
+      const unavailable = getDriveUnavailableReason();
+      if (unavailable) {
+        reject(new Error(unavailable));
+        return;
+      }
       const client = getDriveTokenClient();
       if (!client) {
         reject(new Error('Google認証ライブラリの読み込みに失敗しました。通信環境を確認してください。'));
         return;
       }
+      let settled = false;
+      const timer = setTimeout(() => {
+        finish(reject, new Error('Google認証がタイムアウトしました。認証ウィンドウが開いていないか確認して、もう一度お試しください。'));
+      }, DRIVE_AUTH_TIMEOUT_MS);
+      function finish(fn, value) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        fn(value);
+      }
       client.callback = (resp) => {
         if (resp.error) {
-          reject(new Error('Google認証に失敗しました: ' + resp.error));
+          finish(reject, new Error('Google認証に失敗しました: ' + (resp.error_description || resp.error)));
           return;
         }
         driveAccessToken = resp.access_token;
-        resolve(driveAccessToken);
+        finish(resolve, driveAccessToken);
       };
-      client.requestAccessToken();
+      client.error_callback = (err) => {
+        finish(reject, new Error(describeDriveAuthError(err)));
+      };
+      try {
+        client.requestAccessToken();
+      } catch (err) {
+        finish(reject, new Error('Google認証を開始できませんでした: ' + err.message));
+      }
     });
   }
 
-  async function driveApiFetch(url) {
-    const res = await fetch(url, { headers: { Authorization: 'Bearer ' + driveAccessToken } });
+  // 401(トークン期限切れ)なら一度だけ取り直して再試行する
+  async function driveFetchWithAuth(url) {
+    let res = await fetch(url, { headers: { Authorization: 'Bearer ' + driveAccessToken } });
     if (res.status === 401) {
       driveAccessToken = null;
-      throw new Error('認証の有効期限が切れました。もう一度「Google Drive」ボタンから開き直してください。');
+      await requestDriveAccessToken();
+      res = await fetch(url, { headers: { Authorization: 'Bearer ' + driveAccessToken } });
+    }
+    return res;
+  }
+
+  async function driveApiFetch(url) {
+    const res = await driveFetchWithAuth(url);
+    if (res.status === 401) {
+      driveAccessToken = null;
+      throw new Error('認証の有効期限が切れました。もう一度「Drive」ボタンから開き直してください。');
     }
     if (!res.ok) {
       throw new Error('Drive APIエラー(status ' + res.status + ')');
@@ -716,7 +806,10 @@
 
   async function fetchDriveFileContent(fileId) {
     const url = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
-    const res = await fetch(url, { headers: { Authorization: 'Bearer ' + driveAccessToken } });
+    const res = await driveFetchWithAuth(url);
+    if (res.status === 401) {
+      throw new Error('認証の有効期限が切れました。本棚に戻り「Drive」ボタンから開き直してください。');
+    }
     if (!res.ok) {
       throw new Error('ファイルの取得に失敗しました(status ' + res.status + ')');
     }
@@ -777,9 +870,54 @@
     }
   }
 
+  function clearDriveMessage() {
+    driveMessageEl.innerHTML = '';
+    driveMessageEl.classList.remove('open');
+  }
+
+  function showDriveMessage(text, opts) {
+    opts = opts || {};
+    driveMessageEl.innerHTML = '';
+    driveMessageEl.classList.add('open');
+
+    const p = document.createElement('p');
+    p.textContent = text;
+    driveMessageEl.appendChild(p);
+
+    if (opts.showPublishedLink) {
+      const a = document.createElement('a');
+      a.href = PUBLISHED_APP_URL;
+      a.textContent = PUBLISHED_APP_URL;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      driveMessageEl.appendChild(a);
+    }
+    if (opts.showRetry) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'drive-retry';
+      btn.textContent = '再試行';
+      btn.addEventListener('click', () => { openDrivePanel(); });
+      driveMessageEl.appendChild(btn);
+    }
+  }
+
   async function openDrivePanel() {
     drivePanel.classList.add('open');
     backupPanel.classList.remove('open');
+    clearDriveMessage();
+    driveBreadcrumbEl.innerHTML = '';
+    driveFolderListEl.innerHTML = '';
+
+    // https:// でないオリジンでは認証ポップアップが必ず失敗するので、開く前に案内だけ出す
+    const unavailable = getDriveUnavailableReason();
+    if (unavailable) {
+      driveActionsEl.style.display = 'none';
+      showDriveMessage(unavailable, { showPublishedLink: location.protocol === 'file:' });
+      return;
+    }
+
+    driveActionsEl.style.display = '';
     driveFolderListEl.innerHTML = '<li class="drive-empty">Google認証中...</li>';
     try {
       await requestDriveAccessToken();
@@ -788,10 +926,7 @@
       await renderDriveBrowser();
     } catch (err) {
       driveFolderListEl.innerHTML = '';
-      const li = document.createElement('li');
-      li.className = 'drive-empty';
-      li.textContent = err.message;
-      driveFolderListEl.appendChild(li);
+      showDriveMessage(err.message, { showRetry: true });
     }
   }
 
