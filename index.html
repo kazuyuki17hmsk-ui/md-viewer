@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
 <title>MDビューア</title>
 <style>
   :root {
@@ -72,17 +72,22 @@
   .screen.active {
     display: block;
   }
-  /* ビューア画面はヘッダー・しおりパネルを固定し、本文のみスクロールさせる */
+  /* ビューア画面はヘッダーとボトムバーを固定し、本文のみスクロールさせる。
+     目次・検索・しおりのパネルは position:fixed のボトムシートなのでフローには入らない
+     (= 開いても本文の高さが変わらない)。 */
   #screen-viewer.active {
     display: flex;
     flex-direction: column;
     overflow: hidden;
   }
-  #screen-viewer header,
-  #screen-viewer .bookmark-panel,
-  #screen-viewer .search-panel,
-  #screen-viewer .toc-panel {
+  #screen-viewer > header,
+  #screen-viewer > .bottom-bar {
     flex: 0 0 auto;
+  }
+  /* 本文タップでUIを隠した状態(読書時は本文が画面100%) */
+  #screen-viewer.chrome-hidden > header,
+  #screen-viewer.chrome-hidden > .bottom-bar {
+    display: none;
   }
   /* 本棚一覧画面 */
   #bookshelf-list {
@@ -318,7 +323,7 @@
     color: #888;
   }
 
-  /* ビューア画面 */
+  /* 本棚画面のヘッダーボタン群 */
   .header-actions {
     display: flex;
     flex-wrap: wrap;
@@ -327,54 +332,115 @@
     gap: 6px;
     row-gap: 8px;
   }
-  .font-controls {
-    display: flex;
-    gap: 4px;
+
+  /* ボトムバー(操作系はすべてここ。片手持ちのスマホでも親指が届く) */
+  .bottom-bar {
+    background: var(--accent);
+    border-top: 1px solid rgba(255, 255, 255, 0.2);
+    padding-bottom: env(safe-area-inset-bottom);
   }
-  .font-controls button {
-    min-width: 32px;
-    padding-left: 6px;
-    padding-right: 6px;
+  .bottom-bar-inner {
+    display: flex;
+    max-width: 720px;
+    margin: 0 auto;
+  }
+  .bottom-bar button {
+    flex: 1 1 0;
+    min-width: 0;
+    background: none;
+    border: none;
+    color: #fff;
+    font-size: 0.78rem;
+    padding: 11px 2px;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .bottom-bar button:hover {
+    background: rgba(255, 255, 255, 0.12);
+  }
+  .bottom-bar button.active {
+    background: rgba(255, 255, 255, 0.24);
+  }
+
+  /* ボトムシート(目次・検索・しおり)。本文の上に重ねるので本文の高さを奪わない */
+  .sheet {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 900;
+    /* 広い画面では本文・ボトムバーと同じ幅に揃える */
+    max-width: 720px;
+    margin: 0 auto;
+    max-height: 60vh;
+    overflow-y: auto;
+    background: #fff;
+    border-top: 1px solid var(--border);
+    border-radius: 12px 12px 0 0;
+    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.18);
+    padding: 6px 16px calc(16px + env(safe-area-inset-bottom));
+    transform: translateY(101%);
+    visibility: hidden;
+    transition: transform 0.22s ease, visibility 0s linear 0.22s;
+  }
+  .sheet.open {
+    transform: translateY(0);
+    visibility: visible;
+    transition: transform 0.22s ease, visibility 0s;
+  }
+  /* 下から出てくるUIだと分かるようにするつまみ */
+  .sheet-handle {
+    width: 36px;
+    height: 4px;
+    margin: 2px auto 10px;
+    border-radius: 2px;
+    background: var(--border);
+  }
+  .sheet-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 890;
+    background: rgba(0, 0, 0, 0.28);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.22s ease, visibility 0s linear 0.22s;
+  }
+  .sheet-backdrop.open {
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 0.22s ease, visibility 0s;
   }
 
   /* しおりパネル */
-  .bookmark-panel {
-    display: none;
-    background: #fff;
-    border-bottom: 1px solid var(--border);
-    padding: 12px 16px;
-    flex: 0 0 auto;
-  }
-  .bookmark-panel.open {
-    display: block;
-  }
   .bookmark-add {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
     margin-bottom: 10px;
   }
   .bookmark-add input {
-    flex: 1;
-    padding: 6px 8px;
+    flex: 1 1 140px;
+    min-width: 0;
+    padding: 8px;
     border: 1px solid var(--border);
     border-radius: 4px;
     font-size: 0.9rem;
   }
   .bookmark-add button {
+    flex: 0 0 auto;
     background: var(--accent);
     color: #fff;
     border: none;
-    padding: 6px 12px;
+    padding: 8px 12px;
     border-radius: 4px;
     cursor: pointer;
     white-space: nowrap;
   }
+  /* スクロールはシート側が担うので、リスト自身には高さ制限を持たせない */
   #bookmark-list {
     list-style: none;
     margin: 0;
     padding: 0;
-    max-height: 200px;
-    overflow-y: auto;
   }
   #bookmark-list li {
     display: flex;
@@ -406,31 +472,7 @@
     padding: 4px 8px;
   }
 
-  /* 検索パネル */
-  .search-panel {
-    display: none;
-    background: #fff;
-    border-bottom: 1px solid var(--border);
-    padding: 12px 16px;
-    flex: 0 0 auto;
-  }
-  .search-panel.open {
-    display: block;
-  }
-
   /* 目次パネル */
-  .toc-panel {
-    display: none;
-    background: #fff;
-    border-bottom: 1px solid var(--border);
-    padding: 8px 16px;
-    max-height: 40vh;
-    overflow-y: auto;
-    flex: 0 0 auto;
-  }
-  .toc-panel.open {
-    display: block;
-  }
   #toc-list {
     list-style: none;
     margin: 0;
@@ -609,37 +651,46 @@
   <section id="screen-viewer" class="screen">
     <header>
       <h1 id="viewer-title">タイトル</h1>
-      <div class="header-actions">
-        <button id="btn-back-to-bookshelf" type="button">← 本棚</button>
+    </header>
+    <div id="viewer-content"></div>
+    <nav class="bottom-bar">
+      <div class="bottom-bar-inner">
+        <button id="btn-back-to-bookshelf" type="button">本棚</button>
         <button id="btn-toc-toggle" type="button">目次</button>
         <button id="btn-search-toggle" type="button">検索</button>
         <button id="btn-bookmark-toggle" type="button">しおり</button>
-        <div class="font-controls">
-          <button id="btn-font-decrease" type="button" aria-label="文字を小さく">A-</button>
-          <button id="btn-font-increase" type="button" aria-label="文字を大きく">A+</button>
-        </div>
+        <button id="btn-font-decrease" type="button" aria-label="文字を小さく">A-</button>
+        <button id="btn-font-increase" type="button" aria-label="文字を大きく">A+</button>
       </div>
-    </header>
-    <div id="toc-panel" class="toc-panel">
-      <ul id="toc-list"></ul>
-    </div>
-    <div id="search-panel" class="search-panel">
-      <div class="search-controls">
-        <input type="text" id="search-input" placeholder="検索語を入力">
-        <span id="search-count">0/0</span>
-        <button id="btn-search-prev" type="button" aria-label="前へ">↑</button>
-        <button id="btn-search-next" type="button" aria-label="次へ">↓</button>
-      </div>
-    </div>
-    <div id="bookmark-panel" class="bookmark-panel">
-      <div class="bookmark-add">
-        <input type="text" id="bookmark-memo-input" placeholder="メモ(任意)">
-        <button id="btn-bookmark-add" type="button">＋ 現在位置にしおりを追加</button>
-      </div>
-      <ul id="bookmark-list"></ul>
-    </div>
-    <div id="viewer-content"></div>
+    </nav>
   </section>
+
+  <!-- ボトムシート(本文の上に重なるので、開いても本文の高さは変わらない) -->
+  <div id="sheet-backdrop" class="sheet-backdrop"></div>
+
+  <div id="toc-panel" class="sheet">
+    <div class="sheet-handle"></div>
+    <ul id="toc-list"></ul>
+  </div>
+
+  <div id="search-panel" class="sheet">
+    <div class="sheet-handle"></div>
+    <div class="search-controls">
+      <input type="text" id="search-input" placeholder="検索語を入力">
+      <span id="search-count">0/0</span>
+      <button id="btn-search-prev" type="button" aria-label="前へ">↑</button>
+      <button id="btn-search-next" type="button" aria-label="次へ">↓</button>
+    </div>
+  </div>
+
+  <div id="bookmark-panel" class="sheet">
+    <div class="sheet-handle"></div>
+    <div class="bookmark-add">
+      <input type="text" id="bookmark-memo-input" placeholder="メモ(任意)">
+      <button id="btn-bookmark-add" type="button">＋ 現在位置にしおりを追加</button>
+    </div>
+    <ul id="bookmark-list"></ul>
+  </div>
 
   <div id="selection-toolbar">
     <button id="selection-search-btn" type="button">Web検索</button>
@@ -675,6 +726,7 @@
   const searchCountEl = document.getElementById('search-count');
   const btnSearchPrev = document.getElementById('btn-search-prev');
   const btnSearchNext = document.getElementById('btn-search-next');
+  const sheetBackdrop = document.getElementById('sheet-backdrop');
   const selectionToolbar = document.getElementById('selection-toolbar');
   const selectionSearchBtn = document.getElementById('selection-search-btn');
   const selectionInPageSearchBtn = document.getElementById('selection-inpage-search-btn');
@@ -1276,14 +1328,24 @@
     const rect = viewerContent.getBoundingClientRect();
     if (rect.height === 0) return null;
     const x = rect.left + rect.width / 2;
-    // #viewer-content には上下パディングがあるため、本文に当たるまで少しずつ下へずらす
-    for (const dy of [8, 24, 48, 96]) {
-      const range = caretRangeFromPointCompat(x, rect.top + dy);
-      if (range && viewerContent.contains(range.startContainer)) {
-        return getTextOffsetInViewer(range);
+    // シートの背景(画面全体を覆う)が開いていると caretRangeFromPoint がそちらに当たって
+    // 本文に届かないため、実測の間だけヒットテストの対象から外す。
+    // これをしないと「しおりシートを開いたまま現在位置にしおりを追加」ができない。
+    const overlays = [sheetBackdrop, tocPanel, searchPanel, bookmarkPanel];
+    const savedPointerEvents = overlays.map(el => el.style.pointerEvents);
+    overlays.forEach(el => { el.style.pointerEvents = 'none'; });
+    try {
+      // #viewer-content には上下パディングがあるため、本文に当たるまで少しずつ下へずらす
+      for (const dy of [8, 24, 48, 96]) {
+        const range = caretRangeFromPointCompat(x, rect.top + dy);
+        if (range && viewerContent.contains(range.startContainer)) {
+          return getTextOffsetInViewer(range);
+        }
       }
+      return null;
+    } finally {
+      overlays.forEach((el, i) => { el.style.pointerEvents = savedPointerEvents[i]; });
     }
-    return null;
   }
 
   // 文字オフセットの位置へスクロールする
@@ -1394,7 +1456,7 @@
       main.textContent = label || '(メモなし)';
       main.addEventListener('click', () => {
         scrollToOffset(resolveAnchor(ann, getViewerPlainText()));
-        bookmarkPanel.classList.remove('open');
+        closeAllSheets();
       });
 
       const delBtn = document.createElement('button');
@@ -1530,14 +1592,52 @@
     return true;
   }
 
-  btnBookmarkToggle.addEventListener('click', () => {
-    const willOpen = !bookmarkPanel.classList.contains('open');
-    bookmarkPanel.classList.toggle('open', willOpen);
-    if (willOpen) {
-      closeSearch();
-      tocPanel.classList.remove('open');
+  // ボトムシートの開閉。3つは排他で、開いても本文の高さは変わらない(position: fixed)。
+  // 排他制御が各所に散らばると閉じ忘れが起きるので、ここに集約する。
+  const SHEETS = {
+    toc: { panel: tocPanel, button: btnTocToggle },
+    search: { panel: searchPanel, button: btnSearchToggle },
+    bookmark: { panel: bookmarkPanel, button: btnBookmarkToggle }
+  };
+
+  function isSheetOpen(name) {
+    return SHEETS[name].panel.classList.contains('open');
+  }
+  function anySheetOpen() {
+    return Object.keys(SHEETS).some(isSheetOpen);
+  }
+
+  function closeAllSheets() {
+    // 検索は renderedHTML への復元処理があるので必ず closeSearch() を通す
+    if (isSheetOpen('search')) closeSearch();
+    Object.keys(SHEETS).forEach(name => {
+      SHEETS[name].panel.classList.remove('open');
+      SHEETS[name].button.classList.remove('active');
+    });
+    sheetBackdrop.classList.remove('open');
+  }
+
+  function openSheet(name) {
+    closeAllSheets();
+    SHEETS[name].panel.classList.add('open');
+    SHEETS[name].button.classList.add('active');
+    sheetBackdrop.classList.add('open');
+  }
+
+  function toggleSheet(name) {
+    if (isSheetOpen(name)) {
+      closeAllSheets();
+    } else {
+      openSheet(name);
     }
+  }
+
+  sheetBackdrop.addEventListener('click', closeAllSheets);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && anySheetOpen()) closeAllSheets();
   });
+
+  btnBookmarkToggle.addEventListener('click', () => toggleSheet('bookmark'));
   btnBookmarkAdd.addEventListener('click', addBookmark);
 
   // ファイル内検索
@@ -1653,14 +1753,11 @@
   btnSearchNext.addEventListener('click', () => goToMatch(1));
 
   btnSearchToggle.addEventListener('click', () => {
-    const willOpen = !searchPanel.classList.contains('open');
-    if (willOpen) {
-      searchPanel.classList.add('open');
-      bookmarkPanel.classList.remove('open');
-      tocPanel.classList.remove('open');
-      searchInput.focus();
+    if (isSheetOpen('search')) {
+      closeAllSheets();
     } else {
-      closeSearch();
+      openSheet('search');
+      searchInput.focus();
     }
   });
 
@@ -1687,20 +1784,13 @@
         if (target) {
           target.scrollIntoView({ block: 'start' });
         }
-        tocPanel.classList.remove('open');
+        closeAllSheets();
       });
       tocListEl.appendChild(li);
     });
   }
 
-  btnTocToggle.addEventListener('click', () => {
-    const willOpen = !tocPanel.classList.contains('open');
-    tocPanel.classList.toggle('open', willOpen);
-    if (willOpen) {
-      bookmarkPanel.classList.remove('open');
-      closeSearch();
-    }
-  });
+  btnTocToggle.addEventListener('click', () => toggleSheet('toc'));
 
   // 選択テキストのWeb検索・文中検索
   let pendingSelectionText = '';
@@ -1781,8 +1871,7 @@
     const query = pendingSelectionText;
     const fromOffset = pendingSelectionOffset;
     hideSelectionButton();
-    searchPanel.classList.add('open');
-    bookmarkPanel.classList.remove('open');
+    openSheet('search');
     searchInput.value = query;
     highlightMatches(query);
     jumpToMatchAfterOffset(fromOffset);
@@ -1817,6 +1906,44 @@
     screen.classList.add('active');
   }
 
+  // 本文タップでヘッダーとボトムバーを隠す(Kindle方式)。
+  // ヘッダー/ボトムバーは通常フローの要素なので、隠すとリフローでスクロール位置がずれる。
+  // P0-2で作った文字オフセットの実測・復元をそのまま使って読書位置を保つ。
+  let chromeVisible = true;
+
+  function setChromeVisible(visible) {
+    if (chromeVisible === visible) return;
+    const offset = currentFile ? getOffsetAtViewportTop() : null;
+    chromeVisible = visible;
+    screenViewer.classList.toggle('chrome-hidden', !visible);
+    if (offset != null) scrollToOffset(offset); // クラス変更後に実測するので正しい位置に戻る
+  }
+
+  // マウスのクリックは「文字選択のためのクリック」と区別できないため、タッチ操作のみ対象にする
+  let tapStart = null;
+
+  viewerContent.addEventListener('pointerdown', (e) => {
+    tapStart = e.pointerType === 'touch'
+      ? { x: e.clientX, y: e.clientY, t: Date.now() }
+      : null;
+  });
+
+  viewerContent.addEventListener('pointerup', (e) => {
+    const start = tapStart;
+    tapStart = null;
+    if (!start || e.pointerType !== 'touch') return;
+    if (Math.abs(e.clientX - start.x) > 10 || Math.abs(e.clientY - start.y) > 10) return; // スクロール・選択ドラッグ
+    if (Date.now() - start.t > 400) return; // 長押し(選択開始)
+    if (e.target.closest && e.target.closest('a')) return; // リンクのタップは妨げない
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed) return; // テキスト選択中
+    if (anySheetOpen()) { // シートが開いていれば、まず閉じる操作を優先する
+      closeAllSheets();
+      return;
+    }
+    setChromeVisible(!chromeVisible);
+  });
+
   function renderMarkdown(text) {
     if (window.marked) {
       viewerContent.innerHTML = window.marked.parse(text);
@@ -1832,15 +1959,14 @@
     saveJSON(LAST_OPENED_KEY, lastOpenedAt);
     viewerTitle.textContent = file.name;
     viewerContent.textContent = '読み込み中...';
-    bookmarkPanel.classList.remove('open');
+    closeAllSheets();
     bookmarkMemoInput.value = '';
-    searchPanel.classList.remove('open');
     searchInput.value = '';
     searchMatches = [];
     currentMatchIndex = -1;
     updateSearchCount();
-    tocPanel.classList.remove('open');
     hideSelectionButton();
+    setChromeVisible(true); // 本文非表示のまま次の本に移ると戻り方が分からなくなる
     showScreen(screenViewer);
     try {
       let text;
