@@ -740,14 +740,30 @@
   #viewer-content h1,
   #viewer-content h2,
   #viewer-content h3,
-  #viewer-content h4 {
+  #viewer-content h4,
+  #viewer-content h5,
+  #viewer-content h6 {
     line-height: 1.5;
     margin: 1.6em 0 0.8em;
     color: var(--accent);
   }
   #viewer-content h1 { font-size: 1.6em; }
   #viewer-content h2 { font-size: 1.4em; }
-  #viewer-content h3 { font-size: 1.2em; }
+  /* h3以下は章立てというより症例史・注番号などの細かい区切りに使われることが多い
+     (実際の翻訳原稿で確認)ため、余白をやや詰めて本文との連続感を保つ */
+  #viewer-content h3 { font-size: 1.2em; margin-top: 1.3em; }
+  #viewer-content h4 { font-size: 1.05em; margin-top: 1.2em; }
+  #viewer-content h5 { font-size: 1em; margin-top: 1.1em; }
+  #viewer-content h6 { font-size: 0.95em; margin-top: 1em; }
+  /* 「I.」「1.」「A.」のような番号だけの見出し(症例史の下位区切り等で頻出)は、
+     通常の見出しほど視覚的に重くしない。本文との地続き感を優先する */
+  #viewer-content h2.heading-marker,
+  #viewer-content h3.heading-marker,
+  #viewer-content h4.heading-marker {
+    font-size: 1em;
+    color: var(--fg);
+    margin: 1.1em 0 0.3em;
+  }
   #viewer-content p,
   #viewer-content ul,
   #viewer-content ol,
@@ -2272,6 +2288,15 @@
   });
 
   // 目次
+  // 「I.」「1.」「A.」のような番号だけの見出し。翻訳原稿の症例史・注番号等の下位区切りで頻出し、
+  // 通常の見出しと同じ扱いにすると(a)視覚的に重すぎる (b)目次に同じ短いラベルが何度も並んで
+  // どこを指すか分からなくなる、という2つの問題が起きるため特別扱いする。
+  const HEADING_MARKER_RE = /^[0-9０-９]+[.．)）]?$|^[IVXLCDM]+[.．]?$|^[A-Za-z][.．)）]?$/;
+
+  function isHeadingMarker(text) {
+    return HEADING_MARKER_RE.test(text.trim());
+  }
+
   function buildToc() {
     tocListEl.innerHTML = '';
     const headings = viewerContent.querySelectorAll('h1, h2, h3, h4, h5, h6');
@@ -2282,12 +2307,20 @@
       tocListEl.appendChild(li);
       return;
     }
+    const ancestorByLevel = {}; // level → 直近の見出しテキスト(番号だけの見出しの文脈補完に使う)
     headings.forEach((heading, i) => {
       const id = 'toc-heading-' + i;
       heading.id = id;
       const level = parseInt(heading.tagName.substring(1), 10);
+      const text = heading.textContent.trim();
+      const isMarker = isHeadingMarker(text);
+      heading.classList.toggle('heading-marker', isMarker);
+
       const li = document.createElement('li');
-      li.textContent = heading.textContent;
+      // 番号だけの見出しは、直近の上位見出しを前置してどこを指すか分かるようにする
+      // (例: 「III.」だけでなく「症例史 › III.」と表示する)
+      const parentText = ancestorByLevel[level - 1];
+      li.textContent = (isMarker && parentText) ? `${parentText} › ${text}` : text;
       li.style.paddingLeft = ((level - 1) * 16 + 4) + 'px';
       li.addEventListener('click', () => {
         const target = document.getElementById(id);
@@ -2297,6 +2330,11 @@
         closeAllSheets();
       });
       tocListEl.appendChild(li);
+
+      if (!isMarker) {
+        ancestorByLevel[level] = text;
+        Object.keys(ancestorByLevel).forEach(l => { if (Number(l) > level) delete ancestorByLevel[l]; });
+      }
     });
   }
 
