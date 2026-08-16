@@ -436,6 +436,52 @@
     cursor: pointer;
     white-space: nowrap;
   }
+  /* 注釈(しおり・ハイライト)の色フィルタ・書き出し */
+  .annotation-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  .annotation-filter {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    flex: 1;
+  }
+  .annotation-filter button {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 3px 10px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    color: var(--fg);
+  }
+  .annotation-filter button.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  .annotation-filter .filter-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-right: 4px;
+    vertical-align: middle;
+  }
+  .btn-annotation-export {
+    flex: 0 0 auto;
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    color: var(--fg);
+  }
   /* スクロールはシート側が担うので、リスト自身には高さ制限を持たせない */
   #bookmark-list {
     list-style: none;
@@ -453,23 +499,53 @@
     border-bottom: none;
   }
   .bookmark-item-main {
+    display: flex;
+    align-items: center;
     cursor: pointer;
     flex: 1;
+    min-width: 0;
   }
   .bookmark-item-main:hover {
     color: var(--accent);
+  }
+  .bookmark-item-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ann-dot {
+    flex: 0 0 auto;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-right: 8px;
+  }
+  .ann-dot-bookmark {
+    background: none;
+    border: 2px solid var(--accent);
   }
   .bookmark-empty {
     color: #888;
     padding: 8px 4px;
   }
+  .bookmark-item-actions {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 2px;
+  }
+  .bookmark-note-edit,
   .bookmark-delete {
     background: none;
     border: none;
-    color: #a33;
     cursor: pointer;
     font-size: 0.85rem;
     padding: 4px 8px;
+  }
+  .bookmark-note-edit {
+    color: #777;
+  }
+  .bookmark-delete {
+    color: #a33;
   }
 
   /* 目次パネル */
@@ -531,7 +607,19 @@
     background: #ff9f1c;
   }
 
-  /* 選択テキストのツールバー(Web検索・文中検索) */
+  /* ハイライト(注釈)。検索ハイライトより下のレイヤーとして本文に重ねる */
+  #viewer-content mark.hl {
+    color: inherit;
+    border-radius: 2px;
+    padding: 0 1px;
+    cursor: pointer;
+  }
+  #viewer-content mark.hl-yellow { background: #ffe28a; }
+  #viewer-content mark.hl-green  { background: #b7e4c7; }
+  #viewer-content mark.hl-blue   { background: #a9d6f5; }
+  #viewer-content mark.hl-pink   { background: #f6b8c6; }
+
+  /* 選択テキストのツールバー(Web検索・文中検索・ハイライト) */
   #selection-toolbar {
     display: none;
     position: fixed;
@@ -551,6 +639,57 @@
     cursor: pointer;
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
     white-space: nowrap;
+  }
+
+  /* ハイライトのポップオーバー(色選択・メモ・削除) */
+  #highlight-popover {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    flex-direction: column;
+    gap: 8px;
+    background: #fff;
+    border-radius: 10px;
+    padding: 10px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+    width: 220px;
+  }
+  #highlight-popover.visible {
+    display: flex;
+  }
+  .hl-swatches {
+    display: flex;
+    gap: 8px;
+  }
+  .hl-swatch {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    cursor: pointer;
+    padding: 0;
+  }
+  .hl-swatch.hl-yellow { background: #ffe28a; }
+  .hl-swatch.hl-green  { background: #b7e4c7; }
+  .hl-swatch.hl-blue   { background: #a9d6f5; }
+  .hl-swatch.hl-pink   { background: #f6b8c6; }
+  .hl-swatch.selected {
+    border-color: var(--accent);
+  }
+  #highlight-note-input {
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 0.85rem;
+  }
+  #highlight-delete-btn {
+    align-self: flex-start;
+    background: none;
+    border: none;
+    color: #a33;
+    cursor: pointer;
+    font-size: 0.85rem;
+    padding: 2px;
   }
   #viewer-content {
     flex: 1 1 auto;
@@ -689,12 +828,28 @@
       <input type="text" id="bookmark-memo-input" placeholder="メモ(任意)">
       <button id="btn-bookmark-add" type="button">＋ 現在位置にしおりを追加</button>
     </div>
+    <div class="annotation-toolbar">
+      <div id="annotation-filter" class="annotation-filter"></div>
+      <button id="btn-annotation-export" class="btn-annotation-export" type="button">書き出し</button>
+    </div>
     <ul id="bookmark-list"></ul>
   </div>
 
   <div id="selection-toolbar">
     <button id="selection-search-btn" type="button">Web検索</button>
     <button id="selection-inpage-search-btn" type="button">文中検索</button>
+    <button id="selection-highlight-btn" type="button">ハイライト</button>
+  </div>
+
+  <div id="highlight-popover">
+    <div class="hl-swatches">
+      <button type="button" class="hl-swatch hl-yellow" data-color="yellow" aria-label="黄"></button>
+      <button type="button" class="hl-swatch hl-green" data-color="green" aria-label="緑"></button>
+      <button type="button" class="hl-swatch hl-blue" data-color="blue" aria-label="青"></button>
+      <button type="button" class="hl-swatch hl-pink" data-color="pink" aria-label="ピンク"></button>
+    </div>
+    <input type="text" id="highlight-note-input" placeholder="メモ(任意)">
+    <button id="highlight-delete-btn" type="button">削除</button>
   </div>
 
 </div>
@@ -730,6 +885,12 @@
   const selectionToolbar = document.getElementById('selection-toolbar');
   const selectionSearchBtn = document.getElementById('selection-search-btn');
   const selectionInPageSearchBtn = document.getElementById('selection-inpage-search-btn');
+  const selectionHighlightBtn = document.getElementById('selection-highlight-btn');
+  const highlightPopover = document.getElementById('highlight-popover');
+  const highlightNoteInput = document.getElementById('highlight-note-input');
+  const highlightDeleteBtn = document.getElementById('highlight-delete-btn');
+  const annotationFilterEl = document.getElementById('annotation-filter');
+  const btnAnnotationExport = document.getElementById('btn-annotation-export');
   const btnImportFiles = document.getElementById('btn-import-files');
   const fileImportInput = document.getElementById('file-import-input');
   const btnBackupToggle = document.getElementById('btn-backup-toggle');
@@ -1427,22 +1588,147 @@
   });
   window.addEventListener('beforeunload', flushReadingPosition);
 
-  // 注釈(しおり。P2-1でハイライトが type:'highlight' として加わる)
+  // 注釈(しおり・ハイライト・メモを1モデルに統合。type: 'bookmark' | 'highlight')
+  const HIGHLIGHT_COLORS = ['yellow', 'green', 'blue', 'pink'];
+  const DEFAULT_HIGHLIGHT_COLOR = 'yellow';
+  let annotationFilter = 'all'; // 'all' | 'bookmark' | 'yellow' | 'green' | 'blue' | 'pink'
+
   function getAnnotations(bookId) {
     return (annotations[bookId] || []).filter(a => !a.deleted);
   }
   function saveAnnotations() {
     saveJSON(ANNOTATIONS_KEY, annotations);
   }
+  function updateAnnotation(bookId, id, patch) {
+    const list = annotations[bookId];
+    if (!list) return null;
+    const ann = list.find(a => a.id === id);
+    if (!ann) return null;
+    Object.assign(ann, patch, { updatedAt: nowIso() });
+    saveAnnotations();
+    return ann;
+  }
+
+  // 本文プレーンテキスト上の非重複区間([{start,end,...}])を、対応するラッパー要素で本文に適用する。
+  // ハイライトはインライン要素(em/strong等)の境界をまたいで選択されうるため、
+  // highlightMatches()のような単一テキストノード内の処理では足りず、複数ノードにまたがる区間に対応する。
+  function applyRanges(ranges, factory) {
+    if (ranges.length === 0) return;
+    const walker = document.createTreeWalker(viewerContent, NodeFilter.SHOW_TEXT, null);
+    const textNodes = [];
+    let node;
+    let cumulative = 0;
+    while ((node = walker.nextNode())) {
+      const len = node.nodeValue.length;
+      textNodes.push({ node, start: cumulative, end: cumulative + len });
+      cumulative += len;
+    }
+    textNodes.forEach(({ node, start: nodeStart, end: nodeEnd }) => {
+      const overlapping = ranges.filter(r => r.start < nodeEnd && r.end > nodeStart);
+      if (overlapping.length === 0) return;
+      const text = node.nodeValue;
+      const frag = document.createDocumentFragment();
+      let cursor = 0;
+      overlapping.forEach(r => {
+        const localStart = Math.max(0, r.start - nodeStart);
+        const localEnd = Math.min(text.length, r.end - nodeStart);
+        if (localStart > cursor) frag.appendChild(document.createTextNode(text.slice(cursor, localStart)));
+        if (localEnd > localStart) {
+          const wrapper = factory(r);
+          wrapper.textContent = text.slice(localStart, localEnd);
+          frag.appendChild(wrapper);
+        }
+        cursor = Math.max(cursor, localEnd);
+      });
+      if (cursor < text.length) frag.appendChild(document.createTextNode(text.slice(cursor)));
+      node.parentNode.replaceChild(frag, node);
+    });
+  }
+
+  // ハイライト注釈を本文に重ねる。resolveAnchor()でズレを補正してから描画するため、
+  // 本文編集後もハイライトは(可能な限り)正しい位置に表示され続ける。
+  function applyAnnotationHighlights() {
+    if (!currentFile) return;
+    const list = getAnnotations(currentFile.bookId).filter(a => a.type === 'highlight');
+    if (list.length === 0) return;
+    const text = getViewerPlainText();
+    const ranges = list
+      .map(ann => {
+        const start = resolveAnchor(ann, text);
+        const len = ann.quote ? ann.quote.length : Math.max(0, ann.end - ann.start);
+        return { ann, start, end: Math.min(text.length, start + len) };
+      })
+      .filter(r => r.end > r.start)
+      .sort((a, b) => a.start - b.start);
+
+    // 重なりは基本的に発生しないはずだが、描画が壊れないための安全策としてクリップする
+    let prevEnd = 0;
+    const clipped = [];
+    ranges.forEach(r => {
+      const start = Math.max(r.start, prevEnd);
+      if (start < r.end) {
+        clipped.push({ ann: r.ann, start, end: r.end });
+        prevEnd = r.end;
+      }
+    });
+
+    applyRanges(clipped, (r) => {
+      const mark = document.createElement('mark');
+      mark.className = 'hl hl-' + (r.ann.color || DEFAULT_HIGHLIGHT_COLOR);
+      mark.dataset.annId = r.ann.id;
+      return mark;
+    });
+  }
+
+  // レイヤー再構築: 素のHTML → 注釈ハイライト → (highlightMatches側で)検索ハイライト。
+  // 常にこれを通すことで、検索を閉じてもハイライトが消えなくなる。
+  function rebuildContentLayers() {
+    viewerContent.innerHTML = renderedHTML;
+    applyAnnotationHighlights();
+  }
+
+  function annotationDotClass(ann) {
+    return ann.type === 'highlight' ? 'hl-' + (ann.color || DEFAULT_HIGHLIGHT_COLOR) : 'ann-dot-bookmark';
+  }
+
+  function renderAnnotationFilter() {
+    annotationFilterEl.innerHTML = '';
+    const options = [
+      { key: 'all', label: 'すべて' },
+      { key: 'bookmark', label: 'しおり' },
+      ...HIGHLIGHT_COLORS.map(c => ({ key: c, dot: true }))
+    ];
+    options.forEach(opt => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.classList.toggle('active', annotationFilter === opt.key);
+      if (opt.dot) {
+        const dot = document.createElement('span');
+        dot.className = 'filter-dot hl-' + opt.key;
+        btn.appendChild(dot);
+      } else {
+        btn.appendChild(document.createTextNode(opt.label));
+      }
+      btn.addEventListener('click', () => {
+        annotationFilter = annotationFilter === opt.key ? 'all' : opt.key;
+        renderBookmarkList();
+      });
+      annotationFilterEl.appendChild(btn);
+    });
+  }
 
   function renderBookmarkList() {
+    renderAnnotationFilter();
     bookmarkListEl.innerHTML = '';
     if (!currentFile) return;
-    const list = getAnnotations(currentFile.bookId);
+    let list = getAnnotations(currentFile.bookId);
+    if (annotationFilter === 'bookmark') list = list.filter(a => a.type === 'bookmark');
+    else if (annotationFilter !== 'all') list = list.filter(a => a.type === 'highlight' && (a.color || DEFAULT_HIGHLIGHT_COLOR) === annotationFilter);
+
     if (list.length === 0) {
       const li = document.createElement('li');
       li.className = 'bookmark-empty';
-      li.textContent = 'しおりはまだありません。';
+      li.textContent = '注釈はまだありません。';
       bookmarkListEl.appendChild(li);
       return;
     }
@@ -1451,12 +1737,33 @@
 
       const main = document.createElement('div');
       main.className = 'bookmark-item-main';
-      // メモが無くても、しおり位置の本文が目印として出る
+      const dot = document.createElement('span');
+      dot.className = 'ann-dot ' + annotationDotClass(ann);
+      main.appendChild(dot);
+      const labelEl = document.createElement('span');
+      labelEl.className = 'bookmark-item-label';
+      // メモが無くても、注釈位置の本文が目印として出る
       const label = ann.note || (ann.quote || '').replace(/\s+/g, ' ').trim();
-      main.textContent = label || '(メモなし)';
+      labelEl.textContent = label || '(メモなし)';
+      main.appendChild(labelEl);
       main.addEventListener('click', () => {
         scrollToOffset(resolveAnchor(ann, getViewerPlainText()));
         closeAllSheets();
+      });
+
+      const actions = document.createElement('div');
+      actions.className = 'bookmark-item-actions';
+
+      const noteBtn = document.createElement('button');
+      noteBtn.className = 'bookmark-note-edit';
+      noteBtn.type = 'button';
+      noteBtn.textContent = 'メモ';
+      noteBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const next = prompt('メモを編集', ann.note || '');
+        if (next === null) return;
+        updateAnnotation(currentFile.bookId, ann.id, { note: next.trim() });
+        renderBookmarkList();
       });
 
       const delBtn = document.createElement('button');
@@ -1468,8 +1775,10 @@
         deleteAnnotation(currentFile.bookId, ann.id);
       });
 
+      actions.appendChild(noteBtn);
+      actions.appendChild(delBtn);
       li.appendChild(main);
-      li.appendChild(delBtn);
+      li.appendChild(actions);
       bookmarkListEl.appendChild(li);
     });
   }
@@ -1514,8 +1823,39 @@
     ann.deleted = true;
     ann.updatedAt = nowIso();
     saveAnnotations();
+    if (currentFile && currentFile.bookId === bookId && ann.type === 'highlight') rebuildContentLayers();
     renderBookmarkList();
   }
+
+  function exportAnnotationsMarkdown() {
+    if (!currentFile) return;
+    const list = getAnnotations(currentFile.bookId).slice().sort((a, b) => a.start - b.start);
+    if (list.length === 0) {
+      alert('書き出す注釈がありません。');
+      return;
+    }
+    const lines = [`# ${currentFile.name} の注釈`, ''];
+    list.forEach(ann => {
+      if (ann.type === 'highlight') {
+        lines.push('> ' + (ann.quote || '').replace(/\s+/g, ' ').trim());
+        if (ann.note) lines.push('', ann.note);
+      } else {
+        lines.push('- ' + (ann.note || (ann.quote || '').replace(/\s+/g, ' ').trim() || '(メモなし)'));
+      }
+      lines.push('');
+    });
+    const blob = new Blob([lines.join('\n')], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${currentFile.name.replace(/\.md$/i, '')}-annotations-${stamp}.md`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+  btnAnnotationExport.addEventListener('click', exportAnnotationsMarkdown);
 
   // 旧形式(relPathキー + scrollTop px)を新形式へ遅延変換する。
   // 本を開いてレンダリングが済んだ時点で実測するため、同じ端末・同じ文字サイズなら
@@ -1634,7 +1974,9 @@
 
   sheetBackdrop.addEventListener('click', closeAllSheets);
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && anySheetOpen()) closeAllSheets();
+    if (e.key !== 'Escape') return;
+    if (anySheetOpen()) closeAllSheets();
+    hideHighlightPopover();
   });
 
   btnBookmarkToggle.addEventListener('click', () => toggleSheet('bookmark'));
@@ -1675,7 +2017,7 @@
   }
 
   function highlightMatches(query) {
-    viewerContent.innerHTML = renderedHTML;
+    rebuildContentLayers(); // 素のHTML → 注釈ハイライトを適用してから、検索ハイライトを重ねる
     searchMatches = [];
     currentMatchIndex = -1;
     if (!query) {
@@ -1734,7 +2076,7 @@
   function closeSearch() {
     searchPanel.classList.remove('open');
     searchInput.value = '';
-    if (renderedHTML) viewerContent.innerHTML = renderedHTML;
+    if (renderedHTML) rebuildContentLayers(); // 注釈ハイライトを消さずに検索ハイライトだけ外す
     searchMatches = [];
     currentMatchIndex = -1;
     updateSearchCount();
@@ -1792,20 +2134,31 @@
 
   btnTocToggle.addEventListener('click', () => toggleSheet('toc'));
 
-  // 選択テキストのWeb検索・文中検索
+  // 選択テキストのWeb検索・文中検索・ハイライト
   let pendingSelectionText = '';
-  let pendingSelectionOffset = 0; // viewer-content内のプレーンテキスト上でのオフセット(文字数)
+  let pendingSelectionOffset = 0; // viewer-content内のプレーンテキスト上でのオフセット(文字数、開始位置)
+  let pendingSelectionEnd = 0;
 
   function hideSelectionButton() {
     selectionToolbar.classList.remove('visible');
     pendingSelectionText = '';
   }
 
-  // range開始位置の、viewerContent内プレーンテキスト先頭からの文字数オフセットを求める
+  // range境界(startContainer/startOffset)の、viewerContent内プレーンテキスト先頭からの文字数オフセットを求める
   function getTextOffsetInViewer(range) {
     const preRange = document.createRange();
     preRange.selectNodeContents(viewerContent);
     preRange.setEnd(range.startContainer, range.startOffset);
+    return preRange.toString().length;
+  }
+
+  // range終端(endContainer/endOffset)の同様のオフセット。
+  // selection.toString()の文字数はブロック境界をまたぐ選択で改行が挿入され得るため
+  // (viewerContent.textContentとズレる)、開始と同じ方法で終端も直接測る。
+  function getRangeEndOffsetInViewer(range) {
+    const preRange = document.createRange();
+    preRange.selectNodeContents(viewerContent);
+    preRange.setEnd(range.endContainer, range.endOffset);
     return preRange.toString().length;
   }
 
@@ -1828,6 +2181,7 @@
     }
     pendingSelectionText = text;
     pendingSelectionOffset = getTextOffsetInViewer(range);
+    pendingSelectionEnd = getRangeEndOffsetInViewer(range);
     selectionToolbar.classList.add('visible');
     const toolbarRect = selectionToolbar.getBoundingClientRect();
     let left = rect.left + rect.width / 2 - toolbarRect.width / 2;
@@ -1875,6 +2229,118 @@
     searchInput.value = query;
     highlightMatches(query);
     jumpToMatchAfterOffset(fromOffset);
+  });
+
+  // ハイライト作成 + 色/メモ編集用のポップオーバー
+  let popoverAnnotationId = null;
+
+  function hideHighlightPopover() {
+    highlightPopover.classList.remove('visible');
+    popoverAnnotationId = null;
+  }
+
+  function positionPopoverNear(rect) {
+    const popRect = highlightPopover.getBoundingClientRect();
+    let left = rect.left + rect.width / 2 - popRect.width / 2;
+    left = Math.max(8, Math.min(left, window.innerWidth - popRect.width - 8));
+    let top = rect.bottom + 8;
+    if (top + popRect.height > window.innerHeight - 8) top = rect.top - popRect.height - 8;
+    highlightPopover.style.left = left + 'px';
+    highlightPopover.style.top = Math.max(8, top) + 'px';
+  }
+
+  // 注釈IDが指す範囲(本文内の実際のDOM位置)の矩形を求める。ポップオーバーの位置決めに使う
+  function getAnnotationRect(ann) {
+    const text = getViewerPlainText();
+    const start = resolveAnchor(ann, text);
+    const len = ann.quote ? ann.quote.length : Math.max(1, ann.end - ann.start);
+    const startPos = locateOffsetInViewer(start);
+    const endPos = locateOffsetInViewer(start + len);
+    if (!startPos || !endPos) return null;
+    const range = document.createRange();
+    range.setStart(startPos.node, startPos.offset);
+    range.setEnd(endPos.node, endPos.offset);
+    return range.getBoundingClientRect();
+  }
+
+  function openHighlightPopover(ann, anchorRect) {
+    popoverAnnotationId = ann.id;
+    highlightNoteInput.value = ann.note || '';
+    highlightPopover.querySelectorAll('.hl-swatch').forEach(btn => {
+      btn.classList.toggle('selected', btn.dataset.color === (ann.color || DEFAULT_HIGHLIGHT_COLOR));
+    });
+    highlightPopover.classList.add('visible');
+    const rect = anchorRect || getAnnotationRect(ann);
+    if (rect) positionPopoverNear(rect);
+  }
+
+  highlightPopover.querySelectorAll('.hl-swatch').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (!currentFile || !popoverAnnotationId) return;
+      const color = btn.dataset.color;
+      updateAnnotation(currentFile.bookId, popoverAnnotationId, { color });
+      highlightPopover.querySelectorAll('.hl-swatch').forEach(b => b.classList.toggle('selected', b === btn));
+      rebuildContentLayers();
+      renderBookmarkList();
+    });
+  });
+
+  highlightNoteInput.addEventListener('change', () => {
+    if (!currentFile || !popoverAnnotationId) return;
+    updateAnnotation(currentFile.bookId, popoverAnnotationId, { note: highlightNoteInput.value.trim() });
+    renderBookmarkList();
+  });
+
+  highlightDeleteBtn.addEventListener('click', () => {
+    if (!currentFile || !popoverAnnotationId) return;
+    deleteAnnotation(currentFile.bookId, popoverAnnotationId);
+    hideHighlightPopover();
+  });
+
+  document.addEventListener('mousedown', (e) => {
+    if (!highlightPopover.contains(e.target)) hideHighlightPopover();
+  });
+
+  selectionHighlightBtn.addEventListener('click', () => {
+    if (!currentFile || !pendingSelectionText) return;
+    const start = pendingSelectionOffset;
+    const end = pendingSelectionEnd;
+    hideSelectionButton();
+    if (end <= start) return;
+    const anchor = makeAnchor(start, end);
+    const stamp = nowIso();
+    const entry = {
+      id: newId(),
+      bookId: currentFile.bookId,
+      type: 'highlight',
+      start: anchor.start,
+      end: anchor.end,
+      quote: anchor.quote,
+      prefix: anchor.prefix,
+      suffix: anchor.suffix,
+      color: DEFAULT_HIGHLIGHT_COLOR,
+      note: '',
+      createdAt: stamp,
+      updatedAt: stamp,
+      deleted: false
+    };
+    if (!annotations[currentFile.bookId]) annotations[currentFile.bookId] = [];
+    annotations[currentFile.bookId].push(entry);
+    saveAnnotations();
+    rebuildContentLayers();
+    renderBookmarkList();
+    window.getSelection().removeAllRanges();
+    openHighlightPopover(entry);
+  });
+
+  // 本文中の既存ハイライトをタップ/クリックすると編集用ポップオーバーを開く
+  viewerContent.addEventListener('click', (e) => {
+    const markEl = e.target.closest('mark.hl');
+    if (!markEl || !currentFile) return;
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed) return; // 選択操作の終端でのクリックは無視
+    const ann = (annotations[currentFile.bookId] || []).find(a => a.id === markEl.dataset.annId);
+    if (ann) openHighlightPopover(ann, markEl.getBoundingClientRect());
   });
 
   // フォントサイズ調整
@@ -1934,7 +2400,7 @@
     if (!start || e.pointerType !== 'touch') return;
     if (Math.abs(e.clientX - start.x) > 10 || Math.abs(e.clientY - start.y) > 10) return; // スクロール・選択ドラッグ
     if (Date.now() - start.t > 400) return; // 長押し(選択開始)
-    if (e.target.closest && e.target.closest('a')) return; // リンクのタップは妨げない
+    if (e.target.closest && e.target.closest('a, mark.hl')) return; // リンク・ハイライトのタップは妨げない(clickハンドラ側で処理)
     const selection = window.getSelection();
     if (selection && !selection.isCollapsed) return; // テキスト選択中
     if (anySheetOpen()) { // シートが開いていれば、まず閉じる操作を優先する
@@ -1982,6 +2448,7 @@
       buildToc();
       renderedHTML = viewerContent.innerHTML;
       migrateLegacyBook(file.bookId); // 旧形式(px)のしおりがあれば文字オフセットへ変換
+      rebuildContentLayers(); // 保存済みのハイライトを本文に適用
       renderBookmarkList();
       const saved = readingPositions[file.bookId];
       scrollToOffset(saved ? saved.offset : 0);
