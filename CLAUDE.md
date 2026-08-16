@@ -110,12 +110,36 @@ MVP(§7の1-9)は完了。現在は Phase 3(計画書 §9)。
 - `syncInProgress`フラグで、マージ時の`saveAnnotations()`がまた同期を予約する再帰を防ぐ
 - 既読位置はpullでマージするが**スクロールはしない**(読書中に画面が飛ぶのを避けるため)
 
+## オフライン対応・自己ホスト(P3で実装。2026-08-16)
+
+- **`marked.js`(v18.0.9)と`DOMPurify`(v3.4.13)を`vendor/`に自己ホスト**(バージョン固定)。
+  CDN依存を解消し、Service Workerでのプリキャッシュを可能にした。
+  GISスクリプト(`accounts.google.com/gsi/client`)だけはGoogle側の生きた認証ライブラリのため
+  自己ホストしない(Drive連携はもともとオフライン非対応)
+- **サニタイズ**: `renderMarkdown()`が`DOMPurify.sanitize(marked.parse(text))`を通す。
+  MD内の生HTML(`<script>`・`onerror`属性・`javascript:`リンク等)を除去する。
+  `viewerContent.innerHTML`への代入はこの1箇所のみ(他は空文字列クリアか静的文字列)
+- **PWA**: `manifest.json` + `sw.js`(ルート直下、Service Workerの仕様上ファイル分離が必須)。
+  GitHub Pagesが`/md-viewer/`サブパス配信のため、**相対パスのみ**使用(絶対パスは壊れる)。
+  `sw.js`は同一オリジンのGETのみcache-first、他オリジン(Google API等)は素通し。
+  キャッシュ名にバージョン文字列(`md-viewer-v1`)を持たせ、`activate`で旧キャッシュを削除
+- アイコン(`icons/`)はPillowで生成した簡易な開いた本のグリフ(ブランドカラー`#6b4f3b`)
+
+## 注釈データの永続化(P3でIndexedDBへ移行。2026-08-16)
+
+- **write-throughキャッシュ**: `annotations`/`readingPositions`/`migratedBooks`はメモリ上の
+  プレーンオブジェクトのまま(読み取り・ミューテーション箇所は無変更)。永続化の書き込み先だけ
+  `mdViewerDB`の新ストア`kv`(keyPath: `key`。`IDB_VERSION`を2→3)に切り替えた
+  (localStorageの5MB上限対策)
+- 書き込みは`saveAnnotations()` / `persistReadingPositions()` / `persistMigratedBooks()`に集約
+  (内部で`saveIdbKV()`→`idbKvSet()`)
+- **初回だけの移行**: `loadPersistedOrMigrate()`がIndexedDBに値が無ければlocalStorageの
+  既存値を複製する。`init()`で本棚描画より前に完了させる。**localStorage側は削除しない**
+  (P0-2以来の「ロールバック用に旧データを残す」方針を踏襲)
+
 ## 既知の制約と技術的負債
 
 - Drive連携は`https://`オリジン必須。ローカルの`index.html`を直接開いた場合、Driveパネルが理由と公開版URLを案内する
-- `marked.js`がCDN依存 → オフライン不可。PWA化には自己ホストが前提
-- 注釈データがlocalStorage依存(5MB上限)。超過時は`saveJSON()`が警告を出す(P3でIndexedDBへ移行予定)
-- `marked.parse()`の結果を無サニタイズで`innerHTML`に入れている(自分の原稿のみなら実害は低い)
 - ピン留め・最近読んだはバックアップJSON/Drive同期の対象外(端末ローカルの閲覧履歴のため)
 
 ## 次の優先順位
@@ -127,7 +151,9 @@ MVP(§7の1-9)は完了。現在は Phase 3(計画書 §9)。
 - ~~P1-2 モバイルUI再構成~~ → **完了(2026-08-16)**
 - ~~P2-1 ハイライト + メモ~~ → **完了(2026-08-16)**
 - ~~P2-2 Drive `appDataFolder` による自動同期~~ → **完了(2026-08-16)**
-- P3 `marked`自己ホスト + PWA化(オフライン読書)、注釈データのIndexedDB移行
+- ~~P3 `marked`自己ホスト + PWA化、サニタイズ、注釈データのIndexedDB移行~~ → **完了(2026-08-16)**
+
+Phase 3(計画書 §9)のロードマップはこれで全項目完了。次の課題は §8「未決定事項」や新規要望を参照。
 
 ## 未決定事項(実装しながら判断)
 

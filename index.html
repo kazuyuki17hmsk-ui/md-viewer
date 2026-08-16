@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
 <title>MDビューア</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#6b4f3b">
+<link rel="icon" href="icons/favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
 <style>
   :root {
     --bg: #f5f1e8;
@@ -898,7 +902,8 @@
 
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="vendor/marked.min.js"></script>
+<script src="vendor/purify.min.js"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
 (function () {
@@ -978,12 +983,13 @@
     mdFiles = [...fsFiles, ...idbFilesList, ...driveFiles].sort((a, b) => a.relPath.localeCompare(b.relPath, 'ja'));
   }
 
-  // スマホ向けファイルインポートの永続化 + フォルダハンドルの永続化(IndexedDB)
+  // スマホ向けファイルインポートの永続化 + フォルダハンドルの永続化 + 注釈データの永続化(IndexedDB)
   const IDB_NAME = 'mdViewerDB';
-  const IDB_VERSION = 2;
+  const IDB_VERSION = 3;
   const IDB_STORE = 'files';
   const IDB_HANDLE_STORE = 'dirHandles'; // FileSystemDirectoryHandle はstructured clone可なのでそのまま保存できる
   const IDB_HANDLE_ID = 'root'; // 現状は1フォルダのみ選択可能なため固定キー
+  const IDB_KV_STORE = 'kv'; // 注釈等のJSONをキー値で保存(localStorageの5MB上限対策)
 
   function openIdb() {
     return new Promise((resolve, reject) => {
@@ -995,6 +1001,9 @@
         }
         if (!db.objectStoreNames.contains(IDB_HANDLE_STORE)) {
           db.createObjectStore(IDB_HANDLE_STORE, { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains(IDB_KV_STORE)) {
+          db.createObjectStore(IDB_KV_STORE, { keyPath: 'key' });
         }
       };
       req.onsuccess = () => resolve(req.result);
@@ -1059,6 +1068,26 @@
     return new Promise((resolve, reject) => {
       const tx = db.transaction(IDB_HANDLE_STORE, 'readwrite');
       tx.objectStore(IDB_HANDLE_STORE).delete(IDB_HANDLE_ID);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async function idbKvGet(key) {
+    const db = await openIdb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_KV_STORE, 'readonly');
+      const req = tx.objectStore(IDB_KV_STORE).get(key);
+      req.onsuccess = () => resolve(req.result ? req.result.value : undefined);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function idbKvSet(key, value) {
+    const db = await openIdb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_KV_STORE, 'readwrite');
+      tx.objectStore(IDB_KV_STORE).put({ key, value });
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
@@ -1479,9 +1508,38 @@
     }
   }
 
-  let annotations = loadJSON(ANNOTATIONS_KEY, {});         // { bookId: [annotation] }
-  let readingPositions = loadJSON(READING_POS_V2_KEY, {}); // { bookId: { offset, updatedAt } }
-  let migratedBooks = loadJSON(MIGRATED_BOOKS_KEY, {});    // { bookId: ISO日時 }
+  // 注釈・既読位置・マイグレーション記録はIndexedDBに保存する(localStorageの5MB上限対策)。
+  // 黙って失敗すると気づけないので、こちらもsaveJSON()と同じくstorageWarnedで一度だけ知らせる。
+  function saveIdbKV(key, value) {
+    idbKvSet(key, value).catch((err) => {
+      if (!storageWarned) {
+        storageWarned = true;
+        alert('保存に失敗しました(ブラウザの保存容量の上限に達した可能性があります)。\nバックアップをエクスポートしてから、不要なしおりを整理してください。\n\n' + err.message);
+      }
+    });
+  }
+
+  // 初回だけlocalStorageの既存データをIndexedDBへ複製する。localStorage側は消さずロールバック用に残す。
+  // init()から本棚描画より前に呼ぶことで、本を開く操作が発生する前に必ず読み込みを終える。
+  async function loadPersistedOrMigrate(kvKey, legacyLsKey, fallback) {
+    try {
+      const stored = await idbKvGet(kvKey);
+      if (stored !== undefined) return stored;
+    } catch (err) {
+      // IndexedDBが使えない環境では、この回はlocalStorageの値をそのまま使う(下で読む)
+    }
+    const legacy = loadJSON(legacyLsKey, fallback);
+    try {
+      await idbKvSet(kvKey, legacy);
+    } catch (err) {
+      // 複製できなくても続行(次回起動時に再試行される)
+    }
+    return legacy;
+  }
+
+  let annotations = {};         // { bookId: [annotation] } (init()でIndexedDBから読み込む)
+  let readingPositions = {};    // { bookId: { offset, updatedAt } }
+  let migratedBooks = {};       // { bookId: ISO日時 }
 
   // 「読書中」本棚。端末ローカルの閲覧履歴・ピン留めなので、バックアップJSONには含めない
   // (削除の同期にtombstoneが必要になるほどのデータではないため)。
@@ -1645,7 +1703,7 @@
     const offset = getOffsetAtViewportTop();
     if (offset == null) return;
     readingPositions[currentFile.bookId] = { offset, updatedAt: nowIso() };
-    saveJSON(READING_POS_V2_KEY, readingPositions);
+    persistReadingPositions();
   }
   function flushReadingPosition() {
     clearTimeout(scrollSaveTimer);
@@ -1700,8 +1758,14 @@
     return (annotations[bookId] || []).filter(a => !a.deleted);
   }
   function saveAnnotations() {
-    saveJSON(ANNOTATIONS_KEY, annotations);
+    saveIdbKV('annotations', annotations);
     if (currentFile) scheduleSync(currentFile.bookId); // Drive同期が有効なら少し待って送る
+  }
+  function persistReadingPositions() {
+    saveIdbKV('readingPositions', readingPositions);
+  }
+  function persistMigratedBooks() {
+    saveIdbKV('migratedBooks', migratedBooks);
   }
   function updateAnnotation(bookId, id, patch) {
     const list = annotations[bookId];
@@ -1989,7 +2053,7 @@
 
     if (legacyPx === null && legacyList.length === 0) {
       migratedBooks[bookId] = nowIso();
-      saveJSON(MIGRATED_BOOKS_KEY, migratedBooks);
+      persistMigratedBooks();
       return false;
     }
 
@@ -2030,9 +2094,9 @@
 
     viewerContent.scrollTop = savedScrollTop;
     saveAnnotations();
-    saveJSON(READING_POS_V2_KEY, readingPositions);
+    persistReadingPositions();
     migratedBooks[bookId] = nowIso();
-    saveJSON(MIGRATED_BOOKS_KEY, migratedBooks);
+    persistMigratedBooks();
     return true;
   }
 
@@ -2515,7 +2579,11 @@
   });
 
   function renderMarkdown(text) {
-    if (window.marked) {
+    if (window.marked && window.DOMPurify) {
+      // MD内の生HTML(<script>やonerror等)がそのまま実行されないようDOMPurifyで無害化する
+      viewerContent.innerHTML = window.DOMPurify.sanitize(window.marked.parse(text));
+    } else if (window.marked) {
+      // DOMPurify読み込み失敗時のフォールバック(サニタイズなし)
       viewerContent.innerHTML = window.marked.parse(text);
     } else {
       // marked.js読み込み失敗時のフォールバック: 生テキスト表示
@@ -2849,7 +2917,7 @@
         delete migratedBooks[makeBookId(String(key).split('/').pop())];
       });
       saveJSON(LEGACY_BOOKMARKS_KEY, legacy);
-      saveJSON(MIGRATED_BOOKS_KEY, migratedBooks);
+      persistMigratedBooks();
     }
     if (data.version === 1 && data.readingPositions && typeof data.readingPositions === 'object') {
       const legacyPos = loadJSON(LEGACY_READING_POS_KEY, {});
@@ -2860,7 +2928,7 @@
         delete migratedBooks[makeBookId(String(key).split('/').pop())];
       });
       saveJSON(LEGACY_READING_POS_KEY, legacyPos);
-      saveJSON(MIGRATED_BOOKS_KEY, migratedBooks);
+      persistMigratedBooks();
     }
 
     // 新形式(version 2): 全上書きせず、注釈id単位で updatedAt の新しい方を採用する。
@@ -2877,7 +2945,7 @@
       Object.keys(data.readingPositions).forEach(bookId => {
         if (mergeReadingPosition(bookId, data.readingPositions[bookId])) updated++;
       });
-      saveJSON(READING_POS_V2_KEY, readingPositions);
+      persistReadingPositions();
     }
 
     if (typeof data.fontSize === 'number' && data.fontSize >= FONT_SIZE_MIN && data.fontSize <= FONT_SIZE_MAX) {
@@ -3017,7 +3085,7 @@
     }
     if (pulled) {
       saveAnnotations();
-      saveJSON(READING_POS_V2_KEY, readingPositions);
+      persistReadingPositions();
     }
 
     const list = annotations[bookId] || [];
@@ -3215,6 +3283,15 @@
     } catch (err) {
       idbFilesList = [];
     }
+    // 注釈・既読位置・マイグレーション記録をIndexedDBから読み込む(無ければlocalStorageから複製)。
+    // 本棚描画より前に完了させ、本を開く操作が発生する前に必ず読み込みを終える。
+    try {
+      annotations = await loadPersistedOrMigrate('annotations', ANNOTATIONS_KEY, {});
+      readingPositions = await loadPersistedOrMigrate('readingPositions', READING_POS_V2_KEY, {});
+      migratedBooks = await loadPersistedOrMigrate('migratedBooks', MIGRATED_BOOKS_KEY, {});
+    } catch (err) {
+      // IndexedDBが完全に使えない場合、初期値({})のまま続行する
+    }
     await restoreFsHandle();
     restoreDriveCache();
     recomputeMdFiles();
@@ -3223,6 +3300,12 @@
     renderSyncStatus();
   }
   init();
+
+  // オフライン読書用のService Worker登録。file://では仕様上登録できないため無条件にtryし、
+  // 失敗しても黙って諦める(Drive連携と同じく「非対応環境では機能が単に効かないだけ」)。
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
 })();
 </script>
 </body>
