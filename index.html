@@ -23,6 +23,10 @@
     background: var(--bg);
     color: var(--fg);
     font-family: -apple-system, "Hiragino Sans", "Yu Gothic", sans-serif;
+    /* iOS Safariは長文ページで独自にfont-sizeを再計算する(Text Size Adjust)。
+       文章量が多いと発動しやすく、アプリ側のフォント拡大縮小が効かなくなるため無効化する */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
   }
   #app {
     display: flex;
@@ -731,11 +735,17 @@
   #viewer-content {
     flex: 1 1 auto;
     overflow-y: auto;
-    max-width: 720px;
+    max-width: 100%;
+    width: 100%;
     margin: 0 auto;
     padding: 24px 20px 80px;
     line-height: 1.9;
     font-size: 18px;
+    /* 長いURLや欧文語が1行に収まらない時も、横に伸びずに折り返させる */
+    overflow-wrap: anywhere;
+  }
+  @media (min-width: 760px) {
+    #viewer-content { max-width: 720px; }
   }
   #viewer-content h1,
   #viewer-content h2,
@@ -2577,6 +2587,47 @@
   btnFontDecrease.addEventListener('click', () => changeFontSize(-FONT_SIZE_STEP));
   btnFontIncrease.addEventListener('click', () => changeFontSize(FONT_SIZE_STEP));
   applyFontSize();
+
+  // 表示崩れの診断用。実機(iPhone等)は開発者ツールが使えないため、
+  // ビューアのタイトルを長押し(1秒)すると実測値をalertで表示する。
+  (function setupDiagnostics() {
+    let timerId = null;
+
+    function report() {
+      const para = viewerContent.querySelector('p') || viewerContent;
+      const cs = window.getComputedStyle(para);
+      const vv = window.visualViewport;
+      const lines = [
+        'window.innerWidth: ' + window.innerWidth,
+        'documentElement.clientWidth: ' + document.documentElement.clientWidth,
+        'body.scrollWidth: ' + document.body.scrollWidth,
+        'content client/scroll W: ' + viewerContent.clientWidth + ' / ' + viewerContent.scrollWidth,
+        'content scrollHeight: ' + viewerContent.scrollHeight,
+        '設定fontSize: ' + fontSize + 'px',
+        '実際のfontSize: ' + cs.fontSize,
+        'textSizeAdjust: ' + (cs.webkitTextSizeAdjust || cs.textSizeAdjust || '(未対応)'),
+        'visualViewport: ' + (vv ? Math.round(vv.width) + 'x' + Math.round(vv.height) + ' scale=' + vv.scale.toFixed(2) : '(なし)'),
+        'devicePixelRatio: ' + window.devicePixelRatio,
+        '本文長: ' + (viewerContent.textContent || '').length + '文字'
+      ];
+      window.alert(lines.join('\n'));
+    }
+
+    function cancel() {
+      if (timerId !== null) {
+        clearTimeout(timerId);
+        timerId = null;
+      }
+    }
+
+    viewerTitle.addEventListener('pointerdown', () => {
+      cancel();
+      timerId = setTimeout(() => { timerId = null; report(); }, 1000);
+    });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach((ev) => {
+      viewerTitle.addEventListener(ev, cancel);
+    });
+  })();
 
   function showScreen(screen) {
     [screenBookshelf, screenViewer].forEach(s => s.classList.remove('active'));
