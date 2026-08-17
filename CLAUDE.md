@@ -137,10 +137,35 @@ MVP(§7の1-9)は完了。現在は Phase 3(計画書 §9)。
   既存値を複製する。`init()`で本棚描画より前に完了させる。**localStorage側は削除しない**
   (P0-2以来の「ロールバック用に旧データを残す」方針を踏襲)
 
+## iOSでの表示崩れと実機デバッグ(2026-08-17に修正)
+
+iPhone SE(iOS Chrome)で1.7MB・約62万字のMDを開くと、本文が画面幅に収まらず右端で切れ、
+フォント拡大縮小も効かないように見える症状が出ていた。Chromebook・Kindle Fireでは再現しない。
+
+- **原因はiOS WebKitのテキスト自動拡大**(Text Size Adjust)。長文ページでWebKitが
+  font-sizeを独自に再計算し、JS側の`viewerContent.style.fontSize`を上書きする。
+  `html, body`に`-webkit-text-size-adjust: 100%`を指定して抑止する。
+  iOSはSafariもChromeも同じWebKitなので、ブラウザを変えても回避できない
+- **フォントボタンは壊れていなかった**。下限14px・初期値18pxのため、A-を押せる回数が
+  ちょうど2回しかなかっただけ。「2段階しか効かない」という症状は正常動作で、
+  文字が巨大化していたため効いていないように見えていた
+- **`sw.js`の`CACHE_NAME`を上げ忘れると修正が実機に届かない**。Service Workerがcache-firstのため、
+  プッシュしても古い`index.html`が配信され続ける。**この取り違えで「修正が効かない」と
+  誤診し、無駄な仮説を重ねた**。index.htmlを変えたら必ず`CACHE_NAME`と`APP_VERSION`を上げること
+- **版数表示と診断機能**: 本棚タイトル横に`APP_VERSION`を表示する。実機には開発者ツールが
+  ないため、「修正が効いていない」のか「更新が届いていない」のかをこれで切り分ける。
+  版数表示またはビューアのタイトルを**3回連続タップ**(1.5秒以内)すると、実測の
+  font-size・`visualViewport.scale`・`scrollWidth`等をalertで表示する。
+  **長押しは使わない**——iOSではテキストの長押しが文字選択メニューを起動して
+  `pointercancel`が飛び、長押し判定が成立しない
+
 ## 既知の制約と技術的負債
 
 - Drive連携は`https://`オリジン必須。ローカルの`index.html`を直接開いた場合、Driveパネルが理由と公開版URLを案内する
 - ピン留め・最近読んだはバックアップJSON/Drive同期の対象外(端末ローカルの閲覧履歴のため)
+- iOSの表示崩れ修正は`-webkit-text-size-adjust`・`#viewer-content`の幅指定・`overflow-wrap`を
+  同時にデプロイしたため、**どれが決め手だったかは厳密には未確定**。診断値(font-size一致・
+  横スクロールなし)からテキスト自動拡大が主因とみているが、切り分けには実機での再検証が必要
 
 ## 次の優先順位
 
