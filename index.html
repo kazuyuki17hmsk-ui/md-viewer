@@ -56,6 +56,15 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    /* 診断用の3回タップを取りこぼさないよう、iOSの文字選択メニューを抑止する */
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  /* 実機で動作中のビルドを確認するための版数表示 */
+  .app-version {
+    font-size: 0.7rem;
+    opacity: 0.65;
   }
   header button {
     background: none;
@@ -825,7 +834,7 @@
   <!-- 本棚一覧画面 -->
   <section id="screen-bookshelf" class="screen active">
     <header>
-      <h1>本棚</h1>
+      <h1>本棚 <span id="app-version" class="app-version"></span></h1>
       <div class="header-actions">
         <button id="btn-drive-open" type="button">Drive</button>
         <button id="btn-backup-toggle" type="button">バックアップ</button>
@@ -938,6 +947,11 @@
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
 (function () {
+  // 本棚のタイトル横に表示する。実機で「どのビルドが動いているか」を確認するため
+  // (Service Workerがcache-firstなので、更新が届いていないのか修正が効いていないのかを切り分ける)。
+  // index.htmlを更新したらここと sw.js の CACHE_NAME を合わせて上げること。
+  const APP_VERSION = 'v3';
+
   const screenBookshelf = document.getElementById('screen-bookshelf');
   const screenViewer = document.getElementById('screen-viewer');
   const btnOpenFolder = document.getElementById('btn-open-folder');
@@ -2589,44 +2603,59 @@
   applyFontSize();
 
   // 表示崩れの診断用。実機(iPhone等)は開発者ツールが使えないため、
-  // ビューアのタイトルを長押し(1秒)すると実測値をalertで表示する。
+  // タイトルを3回連続タップすると実測値をalertで表示する。
+  // 長押しは使わない。iOSではテキストの長押しが文字選択メニューを起動して
+  // pointercancelが飛ぶため、長押し判定が成立しない。
   (function setupDiagnostics() {
-    let timerId = null;
-
     function report() {
-      const para = viewerContent.querySelector('p') || viewerContent;
-      const cs = window.getComputedStyle(para);
       const vv = window.visualViewport;
-      const lines = [
+      const lines = ['ビルド: ' + APP_VERSION];
+
+      if (screenViewer.classList.contains('active')) {
+        const para = viewerContent.querySelector('p') || viewerContent;
+        const cs = window.getComputedStyle(para);
+        lines.push(
+          'content client/scroll W: ' + viewerContent.clientWidth + ' / ' + viewerContent.scrollWidth,
+          '設定fontSize: ' + fontSize + 'px',
+          '実際のfontSize: ' + cs.fontSize,
+          'textSizeAdjust: ' + (cs.webkitTextSizeAdjust || cs.textSizeAdjust || '(未対応)'),
+          '本文長: ' + (viewerContent.textContent || '').length + '文字'
+        );
+      } else {
+        lines.push('(本を開くと本文の実測値も表示されます)');
+      }
+
+      lines.push(
         'window.innerWidth: ' + window.innerWidth,
         'documentElement.clientWidth: ' + document.documentElement.clientWidth,
         'body.scrollWidth: ' + document.body.scrollWidth,
-        'content client/scroll W: ' + viewerContent.clientWidth + ' / ' + viewerContent.scrollWidth,
-        'content scrollHeight: ' + viewerContent.scrollHeight,
-        '設定fontSize: ' + fontSize + 'px',
-        '実際のfontSize: ' + cs.fontSize,
-        'textSizeAdjust: ' + (cs.webkitTextSizeAdjust || cs.textSizeAdjust || '(未対応)'),
         'visualViewport: ' + (vv ? Math.round(vv.width) + 'x' + Math.round(vv.height) + ' scale=' + vv.scale.toFixed(2) : '(なし)'),
-        'devicePixelRatio: ' + window.devicePixelRatio,
-        '本文長: ' + (viewerContent.textContent || '').length + '文字'
-      ];
+        'devicePixelRatio: ' + window.devicePixelRatio
+      );
       window.alert(lines.join('\n'));
     }
 
-    function cancel() {
-      if (timerId !== null) {
-        clearTimeout(timerId);
-        timerId = null;
-      }
+    // 3回タップ(1.5秒以内)で発動。dblclickと違い、iOSでも確実に取れる
+    function attach(el) {
+      let count = 0;
+      let timerId = null;
+      el.addEventListener('click', () => {
+        count++;
+        if (timerId !== null) clearTimeout(timerId);
+        if (count >= 3) {
+          count = 0;
+          report();
+          return;
+        }
+        timerId = setTimeout(() => { count = 0; }, 1500);
+      });
     }
 
-    viewerTitle.addEventListener('pointerdown', () => {
-      cancel();
-      timerId = setTimeout(() => { timerId = null; report(); }, 1000);
-    });
-    ['pointerup', 'pointercancel', 'pointerleave'].forEach((ev) => {
-      viewerTitle.addEventListener(ev, cancel);
-    });
+    attach(viewerTitle);
+
+    const versionEl = document.getElementById('app-version');
+    versionEl.textContent = APP_VERSION;
+    attach(versionEl);
   })();
 
   function showScreen(screen) {
