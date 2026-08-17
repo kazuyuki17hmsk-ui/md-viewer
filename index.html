@@ -2819,14 +2819,18 @@
       return;
     }
 
-    // 読書中(ピン留め)・最近読んだ には、bookIdが重複するエントリ(同じ本を複数経路で
-    // 読み込んでいる場合)を1つにまとめて出す。「すべて」は経路ごとの実体をそのまま出す。
-    const seen = new Set();
-    const uniqueByBookId = mdFiles.filter(f => {
-      if (seen.has(f.bookId)) return false;
-      seen.add(f.bookId);
-      return true;
+    // bookIdが重複するエントリ(同じ本をフォルダ/インポート/Driveなど複数経路で読み込んでいる場合)は
+    // 全セクションで1つにまとめる。優先度は fs(直接参照・最速) > drive(クラウド上の最新) >
+    // idb(インポートした複製・最も古くなりやすい)。
+    const SOURCE_PRIORITY = { fs: 0, drive: 1, idb: 2 };
+    const bestBySource = new Map();
+    mdFiles.forEach(f => {
+      const existing = bestBySource.get(f.bookId);
+      if (!existing || SOURCE_PRIORITY[f.source] < SOURCE_PRIORITY[existing.source]) {
+        bestBySource.set(f.bookId, f);
+      }
     });
+    const uniqueByBookId = mdFiles.filter(f => bestBySource.get(f.bookId) === f);
 
     const pinned = uniqueByBookId
       .filter(f => isPinned(f.bookId))
@@ -2839,7 +2843,7 @@
 
     renderBookshelfSection(bookshelfList, '読書中', pinned);
     renderBookshelfSection(bookshelfList, '最近読んだ', recent);
-    renderBookshelfSection(bookshelfList, 'すべて', mdFiles);
+    renderBookshelfSection(bookshelfList, 'すべて', uniqueByBookId);
   }
 
   btnOpenFolder.addEventListener('click', async () => {
