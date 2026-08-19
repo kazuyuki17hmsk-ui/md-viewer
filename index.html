@@ -984,7 +984,7 @@
   // 本棚のタイトル横に表示する。実機で「どのビルドが動いているか」を確認するため
   // (Service Workerがcache-firstなので、更新が届いていないのか修正が効いていないのかを切り分ける)。
   // index.htmlを更新したらここと sw.js の CACHE_NAME を合わせて上げること。
-  const APP_VERSION = 'v4';
+  const APP_VERSION = 'v5';
 
   const screenBookshelf = document.getElementById('screen-bookshelf');
   const screenViewer = document.getElementById('screen-viewer');
@@ -1179,19 +1179,32 @@
   const DRIVE_APPDATA_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
   const DRIVE_SYNC_ENABLED_KEY = 'mdViewer.driveSyncEnabled';
   const DRIVE_LAST_SYNC_KEY = 'mdViewer.driveLastSyncAt';
+  // 過去に同意が取れたスコープ。記録があれば prompt:'' の無音取得を先に試せる
+  const DRIVE_CONSENT_KEY = 'mdViewer.driveConsentedScope';
+  // アクセストークンの保存先(IndexedDBのkvストア)。ページを閉じても期限内は使い回す
+  const DRIVE_TOKEN_KV_KEY = 'driveToken';
   const PUBLISHED_APP_URL = 'https://kazuyuki17hmsk-ui.github.io/md-viewer/';
   const DRIVE_AUTH_TIMEOUT_MS = 120000;
+  // 無音取得は画面に何も出ないので、失敗を長く待たされると同期が固まったように見える
+  const DRIVE_SILENT_AUTH_TIMEOUT_MS = 20000;
+  // 期限ぎりぎりのトークンを使うと処理の途中で401になる。少し手前で切れた扱いにする
+  const DRIVE_TOKEN_MARGIN_MS = 5 * 60 * 1000;
 
   let driveAccessToken = null;
+  let driveTokenExpiresAt = 0;
   let driveTokenClient = null;
   let driveTokenClientScope = null; // スコープが変わったらクライアントを作り直す
   let driveGrantedScopes = '';
+  let driveTokenRestorePromise = null;
+  let driveTokenRefreshTimer = null;
+  let driveTokenRequestPromise = null; // 同時に複数の認証ポップアップを出さないため
   let driveCurrentFolderId = 'root';
   let driveCurrentPath = [{ id: 'root', name: 'マイドライブ' }];
 
   // 同期を有効にした時だけ appdata スコープを要求する。
   // そうしないと、同期を使わないユーザーにまで再同意を強いることになる。
   let driveSyncEnabled = loadJSON(DRIVE_SYNC_ENABLED_KEY, false) === true;
+  let driveConsentedScope = loadJSON(DRIVE_CONSENT_KEY, '') || '';
 
   function getCurrentDriveScope() {
     return driveSyncEnabled
@@ -1199,8 +1212,81 @@
       : DRIVE_READONLY_SCOPE;
   }
 
+  function scopeListCovers(granted, required) {
+    const set = new Set(String(granted || '').split(/\s+/).filter(Boolean));
+    return String(required || '').split(/\s+/).filter(Boolean).every(s => set.has(s));
+  }
+
   function hasAppDataScope() {
-    return driveGrantedScopes.split(/\s+/).indexOf(DRIVE_APPDATA_SCOPE) !== -1;
+    return scopeListCovers(driveGrantedScopes, DRIVE_APPDATA_SCOPE);
+  }
+
+  function driveTokenIsUsable() {
+    return !!driveAccessToken
+      && Date.now() < driveTokenExpiresAt - DRIVE_TOKEN_MARGIN_MS
+      && scopeListCovers(driveGrantedScopes, getCurrentDriveScope());
+  }
+
+  // 一度でも同意が取れたスコープを覚えておく。Googleは同意済みなら prompt:'' で
+  // 画面を一切出さずにトークンを再発行するため、これがあるかどうかが分岐点になる。
+  function rememberDriveConsent(scopes) {
+    const merged = Array.from(new Set(
+      (driveConsentedScope + ' ' + String(scopes || '')).split(/\s+/).filter(Boolean)
+    )).sort().join(' ');
+    if (merged === driveConsentedScope) return;
+    driveConsentedScope = merged;
+    saveJSON(DRIVE_CONSENT_KEY, merged);
+  }
+
+  function hasStoredConsent() {
+    return scopeListCovers(driveConsentedScope, getCurrentDriveScope());
+  }
+
+  function persistDriveToken() {
+    saveIdbKV(DRIVE_TOKEN_KV_KEY, driveAccessToken ? {
+      accessToken: driveAccessToken,
+      scopes: driveGrantedScopes,
+      expiresAt: driveTokenExpiresAt
+    } : null);
+  }
+
+  function clearDriveToken() {
+    driveAccessToken = null;
+    driveTokenExpiresAt = 0;
+    clearTimeout(driveTokenRefreshTimer);
+    persistDriveToken();
+  }
+
+  // 前回のトークンを復元する。アクセストークンの寿命は1時間なので、
+  // 「アプリを開き直すたびに認証」の大半はこれだけで消える。
+  function restoreDriveTokenOnce() {
+    if (driveTokenRestorePromise) return driveTokenRestorePromise;
+    driveTokenRestorePromise = (async () => {
+      try {
+        const rec = await idbKvGet(DRIVE_TOKEN_KV_KEY);
+        if (!rec || !rec.accessToken) return;
+        if (Date.now() >= (rec.expiresAt || 0) - DRIVE_TOKEN_MARGIN_MS) return;
+        driveAccessToken = rec.accessToken;
+        driveGrantedScopes = rec.scopes || '';
+        driveTokenExpiresAt = rec.expiresAt || 0;
+        rememberDriveConsent(driveGrantedScopes);
+        scheduleDriveTokenRefresh();
+      } catch (err) {
+        // 読めなければ取り直すだけなので黙って諦める
+      }
+    })();
+    return driveTokenRestorePromise;
+  }
+
+  // 期限が切れる手前で裏から取り直す。読書中や同期中にいきなり認証画面が出るのを防ぐ。
+  function scheduleDriveTokenRefresh() {
+    clearTimeout(driveTokenRefreshTimer);
+    if (!driveAccessToken) return;
+    const delay = driveTokenExpiresAt - DRIVE_TOKEN_MARGIN_MS - Date.now();
+    if (delay <= 0 || delay > 2147483647) return;
+    driveTokenRefreshTimer = setTimeout(() => {
+      requestDriveAccessToken({ silent: true }).catch(() => {});
+    }, delay);
   }
 
   // GoogleのOAuthは https:// か localhost のオリジンしか受け付けない。
@@ -1240,8 +1326,14 @@
     return 'Google認証に失敗しました' + (type ? '(' + type + ')' : '') + '。';
   }
 
-  function requestDriveAccessToken() {
-    return new Promise((resolve, reject) => {
+  // opts.silent      … ユーザー操作起点でない呼び出し。失敗しても静かに諦める前提で待ち時間を短くする
+  // opts.chooseAccount … アカウントを選び直したい時だけ true(通常は prompt:'' で画面を出さない)
+  function requestDriveAccessToken(opts) {
+    opts = opts || {};
+    // 同時に走らせるとポップアップが二重に開く。先行の結果を共有する。
+    // ただしアカウント選択は「先行の無音取得の結果」で代用できないので束ねない。
+    if (driveTokenRequestPromise && !opts.chooseAccount) return driveTokenRequestPromise;
+    const promise = new Promise((resolve, reject) => {
       const unavailable = getDriveUnavailableReason();
       if (unavailable) {
         reject(new Error(unavailable));
@@ -1255,7 +1347,7 @@
       let settled = false;
       const timer = setTimeout(() => {
         finish(reject, new Error('Google認証がタイムアウトしました。認証ウィンドウが開いていないか確認して、もう一度お試しください。'));
-      }, DRIVE_AUTH_TIMEOUT_MS);
+      }, opts.silent ? DRIVE_SILENT_AUTH_TIMEOUT_MS : DRIVE_AUTH_TIMEOUT_MS);
       function finish(fn, value) {
         if (settled) return;
         settled = true;
@@ -1268,25 +1360,95 @@
           return;
         }
         driveAccessToken = resp.access_token;
-        driveGrantedScopes = resp.scope || '';
+        driveGrantedScopes = resp.scope || getCurrentDriveScope();
+        driveTokenExpiresAt = Date.now() + (Number(resp.expires_in) || 3600) * 1000;
+        rememberDriveConsent(driveGrantedScopes);
+        persistDriveToken();
+        scheduleDriveTokenRefresh();
         finish(resolve, driveAccessToken);
       };
       client.error_callback = (err) => {
         finish(reject, new Error(describeDriveAuthError(err)));
       };
       try {
-        client.requestAccessToken();
+        // prompt:'' は「初回だけ同意画面を出し、以降は何も出さずに発行する」指定。
+        // 省略時の既定は 'select_account consent' で、毎回アカウント選択と同意
+        // (場合によっては2段階認証)を求められるため、明示的に空文字を渡す。
+        client.requestAccessToken(opts.chooseAccount ? { prompt: 'select_account consent' } : { prompt: '' });
       } catch (err) {
         finish(reject, new Error('Google認証を開始できませんでした: ' + err.message));
       }
     });
+    driveTokenRequestPromise = promise;
+    const release = () => { if (driveTokenRequestPromise === promise) driveTokenRequestPromise = null; };
+    promise.then(release, release);
+    return promise;
   }
+
+  // Drive APIを叩く前に必ず通す入口。
+  //   1. 保存済みトークンが生きていればそのまま使う(認証UIなし)
+  //   2. 同意の記録があれば prompt:'' で無音再取得(認証UIなし。Googleのセッションが生きている限り)
+  //   3. それでも駄目な時だけ、ユーザー操作起点の呼び出しに限りポップアップを出す
+  async function ensureDriveToken(opts) {
+    opts = opts || {};
+    // アカウントを選び直したい時は、既存トークンも無音取得も飛ばして選択画面まで進める
+    if (opts.chooseAccount) return requestDriveAccessToken({ chooseAccount: true });
+    await restoreDriveTokenOnce();
+    if (driveTokenIsUsable()) return driveAccessToken;
+    if (hasStoredConsent()) {
+      try {
+        return await requestDriveAccessToken({ silent: !opts.interactive });
+      } catch (err) {
+        if (!opts.interactive) throw err;
+      }
+    }
+    if (!opts.interactive) {
+      throw new Error('Google認証が必要です。「Drive」ボタンから認証してください。');
+    }
+    return requestDriveAccessToken({ chooseAccount: !!opts.chooseAccount });
+  }
+
+  // GISのスクリプトは async defer で読み込まれるため、起動直後はまだ無いことがある
+  function waitForGis(timeoutMs) {
+    return new Promise(resolve => {
+      const deadline = Date.now() + timeoutMs;
+      (function check() {
+        if (window.google && google.accounts && google.accounts.oauth2) { resolve(true); return; }
+        if (Date.now() >= deadline) { resolve(false); return; }
+        setTimeout(check, 200);
+      })();
+    });
+  }
+
+  // 起動時に、以前Driveを使っていた場合だけ裏でトークンを用意しておく。
+  // 「Drive」ボタンを押した時点では取得済みになっているので、認証画面が出ない。
+  async function warmUpDriveToken() {
+    if (getDriveUnavailableReason()) return;
+    await restoreDriveTokenOnce();
+    if (driveTokenIsUsable()) return;
+    // Driveを一度も使っていない人に、起動しただけで認証を走らせない
+    if (!driveSyncEnabled && !loadDriveCache()) return;
+    if (!hasStoredConsent()) return;
+    if (!(await waitForGis(15000))) return;
+    try {
+      await requestDriveAccessToken({ silent: true });
+    } catch (err) {
+      // Googleのセッションが切れている等。次にDriveを操作した時に対話的に取り直す
+    }
+  }
+
+  // バックグラウンドのタブではタイマーが遅延・停止するため、復帰時にも確認する。
+  // (スマホでアプリを切り替えて戻ってきた時に、期限切れのまま操作するのを防ぐ)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') warmUpDriveToken();
+  });
 
   // 401(トークン期限切れ)なら一度だけ取り直して再試行する
   async function driveFetchWithAuth(url) {
+    await ensureDriveToken({ interactive: true });
     let res = await fetch(url, { headers: { Authorization: 'Bearer ' + driveAccessToken } });
     if (res.status === 401) {
-      driveAccessToken = null;
+      clearDriveToken();
       await requestDriveAccessToken();
       res = await fetch(url, { headers: { Authorization: 'Bearer ' + driveAccessToken } });
     }
@@ -1296,7 +1458,7 @@
   async function driveApiFetch(url) {
     const res = await driveFetchWithAuth(url);
     if (res.status === 401) {
-      driveAccessToken = null;
+      clearDriveToken();
       throw new Error('認証の有効期限が切れました。もう一度「Drive」ボタンから開き直してください。');
     }
     if (!res.ok) {
@@ -1425,9 +1587,20 @@
       btn.addEventListener('click', () => { openDrivePanel(); });
       driveMessageEl.appendChild(btn);
     }
+    // 無音取得(prompt:'')は、別アカウントでログインし直した時などに失敗しうる。
+    // その場合だけアカウント選択画面を明示的に出せる逃げ道を用意する。
+    if (opts.showAccountSwitch) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'drive-retry';
+      btn.textContent = 'アカウントを選び直す';
+      btn.addEventListener('click', () => { openDrivePanel({ chooseAccount: true }); });
+      driveMessageEl.appendChild(btn);
+    }
   }
 
-  async function openDrivePanel() {
+  async function openDrivePanel(opts) {
+    opts = opts || {};
     drivePanel.classList.add('open');
     backupPanel.classList.remove('open');
     clearDriveMessage();
@@ -1446,15 +1619,17 @@
     renderDriveLastFolderHint(); // 認証前でもlocalStorageのキャッシュからすぐ表示できる
 
     driveActionsEl.style.display = '';
-    driveFolderListEl.innerHTML = '<li class="drive-empty">Google認証中...</li>';
+    // 保存済みトークンが生きていれば認証UIは出ないので、その旨が分かる文言にする
+    driveFolderListEl.innerHTML = '<li class="drive-empty">Driveに接続中...</li>';
     try {
-      await requestDriveAccessToken();
+      if (opts.chooseAccount) clearDriveToken();
+      await ensureDriveToken({ interactive: true, chooseAccount: !!opts.chooseAccount });
       driveCurrentFolderId = 'root';
       driveCurrentPath = [{ id: 'root', name: 'マイドライブ' }];
       await renderDriveBrowser();
     } catch (err) {
       driveFolderListEl.innerHTML = '';
-      showDriveMessage(err.message, { showRetry: true });
+      showDriveMessage(err.message, { showRetry: true, showAccountSwitch: true });
     }
   }
 
@@ -2728,6 +2903,16 @@
         'visualViewport: ' + (vv ? Math.round(vv.width) + 'x' + Math.round(vv.height) + ' scale=' + vv.scale.toFixed(2) : '(なし)'),
         'devicePixelRatio: ' + window.devicePixelRatio
       );
+
+      // 認証まわりも実機で切り分けたいので載せる(トークン本体は表示しない)
+      const remainMin = driveAccessToken
+        ? Math.round((driveTokenExpiresAt - Date.now()) / 60000) + '分'
+        : '(なし)';
+      lines.push(
+        'Driveトークン残り: ' + remainMin,
+        '同意済みスコープ: ' + (driveConsentedScope ? driveConsentedScope.replace(/https:\/\/www\.googleapis\.com\/auth\//g, '') : '(なし)'),
+        '自動同期: ' + (driveSyncEnabled ? 'ON' : 'OFF')
+      );
       window.alert(lines.join('\n'));
     }
 
@@ -3259,6 +3444,8 @@
   }
 
   async function appDataUpload(name, fileId, obj, isRetry) {
+    // ここは driveFetchWithAuth を通らない(multipart POST)ので、自前でトークンを確保する
+    if (!isRetry) await ensureDriveToken();
     const boundary = 'mdv' + Math.random().toString(36).slice(2);
     const metadata = fileId ? { name } : { name, parents: ['appDataFolder'] };
     const body =
@@ -3279,7 +3466,7 @@
       body
     });
     if (res.status === 401 && !isRetry) {
-      driveAccessToken = null;
+      clearDriveToken();
       await requestDriveAccessToken();
       return appDataUpload(name, fileId, obj, true); // 再試行は一度だけ(無限ループ防止)
     }
@@ -3334,9 +3521,9 @@
     return { pulled, pushed: true };
   }
 
-  async function ensureSyncToken() {
-    if (driveAccessToken && hasAppDataScope()) return;
-    await requestDriveAccessToken();
+  async function ensureSyncToken(interactive) {
+    if (driveTokenIsUsable() && hasAppDataScope()) return;
+    await ensureDriveToken({ interactive: interactive !== false });
     if (!hasAppDataScope()) {
       throw new Error('同期に必要な権限(appDataFolder)が許可されませんでした。');
     }
@@ -3393,10 +3580,10 @@
   }
 
   // 注釈を変更したら少し待ってから該当の本だけ送る。
-  // トークンが無い間は何もしない(勝手に認証ポップアップを開かないため)。
+  // トークンはこの時点で無くてもよい(runPendingSyncが無音で取り直す)。
   function scheduleSync(bookId) {
     if (!driveSyncEnabled || !bookId || syncInProgress) return;
-    if (!driveAccessToken || !hasAppDataScope()) return;
+    if (getDriveUnavailableReason()) return;
     pendingSyncBooks.add(bookId);
     clearTimeout(syncPushTimer);
     syncPushTimer = setTimeout(runPendingSync, SYNC_DEBOUNCE_MS);
@@ -3406,9 +3593,12 @@
   // 読書位置はマージするだけでスクロールはしない(読んでいる最中に画面が飛ぶのを避けるため)。
   function pullBookInBackground(bookId) {
     if (!driveSyncEnabled || syncInProgress) return;
-    if (!driveAccessToken || !hasAppDataScope()) return;
+    if (getDriveUnavailableReason()) return;
     syncInProgress = true;
-    syncBook(bookId)
+    // ユーザー操作起点ではないので interactive: false。
+    // 認証UIが必要な状況なら黙って諦める(ポップアップはブラウザにブロックされるため)。
+    ensureSyncToken(false)
+      .then(() => syncBook(bookId))
       .then(r => {
         if (r.pulled && currentFile && currentFile.bookId === bookId) {
           rebuildContentLayers();
@@ -3425,6 +3615,7 @@
     pendingSyncBooks.clear();
     syncInProgress = true;
     try {
+      await ensureSyncToken(false);
       for (const bookId of ids) {
         await syncBook(bookId);
       }
@@ -3432,7 +3623,9 @@
       saveJSON(DRIVE_LAST_SYNC_KEY, driveLastSyncAt);
       renderSyncStatus();
     } catch (err) {
-      setSyncStatus('自動同期に失敗しました: ' + err.message, true);
+      // 失敗した分は捨てずに戻す。次の変更時、または「今すぐ同期」で再送される
+      ids.forEach(id => pendingSyncBooks.add(id));
+      setSyncStatus('自動同期は保留中です(' + err.message + ')', true);
     } finally {
       syncInProgress = false;
     }
@@ -3451,14 +3644,14 @@
       setSyncStatus(reason, true);
       return;
     }
-    // スコープを広げるため、先にフラグを立ててからトークンを取り直す
+    // スコープを広げるため、先にフラグを立ててからトークンを取り直す。
+    // 既に appdata まで同意済みなら driveTokenIsUsable()/hasStoredConsent() が
+    // スコープの充足を見て無音で通すので、ここでトークンを捨てる必要はない。
     driveSyncEnabled = true;
     saveJSON(DRIVE_SYNC_ENABLED_KEY, true);
-    driveAccessToken = null;
-    driveGrantedScopes = '';
     try {
-      setSyncStatus('Google認証中...');
-      await ensureSyncToken();
+      setSyncStatus('Driveに接続中...');
+      await ensureSyncToken(true);
       await runSyncAll();
     } catch (err) {
       driveSyncEnabled = false;
@@ -3521,6 +3714,7 @@
     renderBookshelf();
     driveSyncToggle.checked = driveSyncEnabled;
     renderSyncStatus();
+    warmUpDriveToken(); // 待たない(本棚の表示を認証で遅らせない)
   }
   init();
 

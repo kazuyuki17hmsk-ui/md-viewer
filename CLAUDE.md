@@ -178,9 +178,56 @@ iPhone・Kindle Fireで文字列を選択すると、OSの「コピー」等の�
   (ハイライトのメモ入力がキーボードに隠れるのを防ぐ)
 - ハイライトのポップオーバーも同じ理由・同じ仕組みでタッチ時はドックする
 
+## Google認証の頻度を下げる(2026-08-19)
+
+アプリを開き直すたび・Driveフォルダを変えるたびに認証画面(しばしば2段階認証)が出ていた。
+原因は2つあり、両方を潰した。
+
+- **`prompt`を明示していなかった**。GISの`requestAccessToken()`は省略時の既定が
+  `'select_account consent'`で、**毎回アカウント選択+同意画面**を出す仕様。
+  `{ prompt: '' }`(「初回だけ同意画面、以降は無音で発行」)を明示的に渡す。
+  これが2段階認証まで誘発していた主因
+- **トークンをメモリにしか持っていなかった**。アクセストークンの寿命は1時間あるのに、
+  リロード・アプリ再起動で毎回捨てていた。IndexedDBの`kv`ストア(`driveToken`キー。
+  `{ accessToken, scopes, expiresAt }`)に保存し、`restoreDriveTokenOnce()`で復元する
+
+その上で、認証を「ユーザーが待たされる場面」から外した。
+
+- **`ensureDriveToken({interactive})`が唯一の入口**。①保存済みトークンが生きていれば即返す
+  → ②同意の記録(`mdViewer.driveConsentedScope`)があれば`prompt:''`で無音再取得
+  → ③それでも駄目な時だけ、**ユーザー操作起点の呼び出しに限り**認証画面を出す。
+  `driveFetchWithAuth()`・`appDataUpload()`・`ensureSyncToken()`は全てここを通る
+- **起動時に`warmUpDriveToken()`で先回りする**。前回Driveを使っていた形跡
+  (`driveCache`があるか同期がON)があり、かつ同意済みの時だけ裏でトークンを用意する。
+  Driveを使わない人に起動しただけで認証を走らせない。GISは`async defer`で読み込まれるため
+  `waitForGis()`で最大15秒待つ
+- **期限の5分前に裏で取り直す**(`scheduleDriveTokenRefresh()`)。加えて`visibilitychange`でも
+  確認する(バックグラウンドのタブではタイマーが遅延・停止するため)
+- **有効判定は5分のマージン付き**(`driveTokenIsUsable()`)。期限ぎりぎりのトークンで
+  処理を始めると途中で401になる。スコープの充足(`scopeListCovers()`)も同じ関数で見るので、
+  同期をONにした時に**トークンを捨てる必要がない**(appdataまで同意済みなら無音で通る)
+- **同時実行の抑止**: `driveTokenRequestPromise`で認証リクエストを1本に束ねる
+  (ポップアップの二重表示を防ぐ)
+- **`prompt:''`が失敗した時の逃げ道**: 別アカウントでログインし直した場合などに備え、
+  Driveパネルのエラーに「アカウントを選び直す」ボタンを出す
+  (`showDriveMessage({showAccountSwitch:true})` → `prompt:'select_account consent'`)
+- 自動同期は「トークンがある間だけ」から「**無音で取れるなら取る**」に変更した。
+  `runPendingSync()`は失敗時に対象を`pendingSyncBooks`へ戻すので、送信漏れが起きない
+- 3回タップの診断表示にトークン残り時間・同意済みスコープ・同期ON/OFFを追加した
+  (トークン本体は表示しない)
+
 ## 既知の制約と技術的負債
 
 - Drive連携は`https://`オリジン必須。ローカルの`index.html`を直接開いた場合、Driveパネルが理由と公開版URLを案内する
+- **ブラウザのOAuthではリフレッシュトークンを持てない**(GISのトークンモデルの制約)。
+  アクセストークンの上限は1時間なので、「認証ゼロ」にはできない。無音再取得で
+  ユーザーに見えなくしているだけで、Googleのセッション自体が切れれば再ログインは必要
+- **`prompt:''`の無音再取得はブラウザのCookie制限に依存する**。iOS Safari/ChromeのITPや
+  サードパーティCookieのブロックが強い環境では無音取得が失敗し、対話的な認証に落ちうる。
+  その場合でも保存済みトークン(1時間)は効くので、頻度は下がる
+- アクセストークンをIndexedDBに平文で保存している。同一オリジンからしか読めず、
+  スコープも`drive.readonly`(+`drive.appdata`)に限られるが、XSSが成立すれば読み出される。
+  `renderMarkdown()`のDOMPurifyがその最後の防壁になっている
 - ピン留め・最近読んだはバックアップJSON/Drive同期の対象外(端末ローカルの閲覧履歴のため)
 - iOSの表示崩れ修正は`-webkit-text-size-adjust`・`#viewer-content`の幅指定・`overflow-wrap`を
   同時にデプロイしたため、**どれが決め手だったかは厳密には未確定**。診断値(font-size一致・
