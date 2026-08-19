@@ -159,6 +159,25 @@ iPhone SE(iOS Chrome)で1.7MB・約62万字のMDを開くと、本文が画面�
   **長押しは使わない**——iOSではテキストの長押しが文字選択メニューを起動して
   `pointercancel`が飛び、長押し判定が成立しない
 
+## 選択ツールバーのドック表示(2026-08-19)
+
+iPhone・Kindle Fireで文字列を選択すると、OSの「コピー」等のネイティブメニューが
+選択範囲に密着して出るため、同じ位置に浮かせていた選択ツールバー
+(Web検索/文中検索/ハイライト)と重なって押せなかった。
+
+- **タッチ操作の時だけ画面下端にドックする**(`dockElement()` / `undockElement()`)。
+  ネイティブメニューは選択範囲を追うので、下端に固定すれば構造的に重ならない。
+  マウス操作(Chromebook)は従来通り選択範囲の近くに浮かせる
+- **判定は`lastPointerWasTouch`**。`viewerContent`の`pointerdown`(capture)と`touchend`で更新する。
+  `(pointer: coarse)`のメディアクエリだとタッチ対応Chromebookで常時ドックになるため使わない
+- **下端位置は`dockBottomPx()`が実測**する。ボトムバーの`getBoundingClientRect().height`の
+  上に置き、バーが非表示(`chrome-hidden`)の時はバーの`padding-bottom`
+  (= `env(safe-area-inset-bottom)`)を読んで安全領域を確保する
+- **ソフトキーボードに追従**: `visualViewport`の`resize`/`scroll`で
+  `window.innerHeight - vv.height - vv.offsetTop`をキーボード高とみなして再配置する
+  (ハイライトのメモ入力がキーボードに隠れるのを防ぐ)
+- ハイライトのポップオーバーも同じ理由・同じ仕組みでタッチ時はドックする
+
 ## 既知の制約と技術的負債
 
 - Drive連携は`https://`オリジン必須。ローカルの`index.html`を直接開いた場合、Driveパネルが理由と公開版URLを案内する

@@ -690,6 +690,40 @@
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
     white-space: nowrap;
   }
+  /* タッチ操作で選択した時は画面下端(ボトムバーの上)に寄せる。
+     iOS/Fireの「コピー」等のネイティブメニューは選択範囲に密着して出るため、
+     選択範囲の近くに浮かせると必ず重なって押せなくなる。
+     bottom は dockBottomPx() が実測してインラインで与える */
+  #selection-toolbar.docked,
+  #highlight-popover.docked {
+    left: 0;
+    right: 0;
+    top: auto;
+    width: auto;
+    max-width: none;
+    background: var(--bg);
+    border-top: 1px solid var(--border);
+    box-shadow: 0 -3px 12px rgba(0, 0, 0, 0.2);
+    border-radius: 0;
+  }
+  #selection-toolbar.docked {
+    justify-content: center;
+    flex-wrap: wrap;
+    padding: 8px;
+  }
+  #highlight-popover.docked {
+    padding: 10px 12px;
+  }
+  /* ドック時は幅いっぱいに広がるので、本文・シートと同じく中央寄せで幅を揃える */
+  #highlight-popover.docked > * {
+    width: 100%;
+    max-width: 480px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  #highlight-popover.docked .hl-swatches {
+    justify-content: center;
+  }
 
   /* ハイライトのポップオーバー(色選択・メモ・削除) */
   #highlight-popover {
@@ -950,7 +984,7 @@
   // 本棚のタイトル横に表示する。実機で「どのビルドが動いているか」を確認するため
   // (Service Workerがcache-firstなので、更新が届いていないのか修正が効いていないのかを切り分ける)。
   // index.htmlを更新したらここと sw.js の CACHE_NAME を合わせて上げること。
-  const APP_VERSION = 'v3';
+  const APP_VERSION = 'v4';
 
   const screenBookshelf = document.getElementById('screen-bookshelf');
   const screenViewer = document.getElementById('screen-viewer');
@@ -2374,8 +2408,53 @@
   let pendingSelectionOffset = 0; // viewer-content内のプレーンテキスト上でのオフセット(文字数、開始位置)
   let pendingSelectionEnd = 0;
 
+  // タッチで選択したかどうか。ネイティブの「コピー」メニューが出るのはタッチ操作の時だけなので、
+  // ドック表示に切り替えるかの判定に使う(マウス操作のChromebookでは従来通り選択範囲の近くに出す)
+  let lastPointerWasTouch = false;
+
+  // ドックする要素の下端位置(px)。ボトムバーの実測高さの上に置く。
+  // ソフトキーボードが出ている間はその上に逃がす(visualViewportで高さを測る)
+  function dockBottomPx() {
+    const vv = window.visualViewport;
+    const keyboard = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
+    if (keyboard > 1) return keyboard;
+    const bar = document.querySelector('#screen-viewer .bottom-bar');
+    if (!bar) return 0;
+    const h = bar.getBoundingClientRect().height;
+    // バーが非表示(本文タップでUIを隠した状態)の時は、バーが持っているsafe-area分を自前で確保する
+    if (h > 0) return h;
+    return parseFloat(getComputedStyle(bar).paddingBottom) || 0;
+  }
+
+  function dockElement(el) {
+    el.style.left = '';
+    el.style.top = '';
+    el.style.bottom = dockBottomPx() + 'px';
+    el.classList.add('docked');
+  }
+
+  function undockElement(el) {
+    el.classList.remove('docked');
+    el.style.bottom = '';
+  }
+
+  // キーボードの開閉や画面回転でドック位置がずれるので追従させる
+  function repositionDockedElements() {
+    [selectionToolbar, highlightPopover].forEach(el => {
+      if (el.classList.contains('docked') && el.classList.contains('visible')) {
+        el.style.bottom = dockBottomPx() + 'px';
+      }
+    });
+  }
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', repositionDockedElements);
+    window.visualViewport.addEventListener('scroll', repositionDockedElements);
+  }
+  window.addEventListener('resize', repositionDockedElements);
+
   function hideSelectionButton() {
     selectionToolbar.classList.remove('visible');
+    undockElement(selectionToolbar);
     pendingSelectionText = '';
   }
 
@@ -2418,6 +2497,12 @@
     pendingSelectionOffset = getTextOffsetInViewer(range);
     pendingSelectionEnd = getRangeEndOffsetInViewer(range);
     selectionToolbar.classList.add('visible');
+    if (lastPointerWasTouch) {
+      // ネイティブの選択メニューは選択範囲に密着して出るため、こちらは画面下端へ退避する
+      dockElement(selectionToolbar);
+      return;
+    }
+    undockElement(selectionToolbar);
     const toolbarRect = selectionToolbar.getBoundingClientRect();
     let left = rect.left + rect.width / 2 - toolbarRect.width / 2;
     left = Math.max(8, Math.min(left, window.innerWidth - toolbarRect.width - 8));
@@ -2427,10 +2512,14 @@
     selectionToolbar.style.top = top + 'px';
   }
 
+  viewerContent.addEventListener('pointerdown', (e) => {
+    lastPointerWasTouch = (e.pointerType === 'touch' || e.pointerType === 'pen');
+  }, true);
   viewerContent.addEventListener('mouseup', () => {
     setTimeout(showSelectionButtonForSelection, 0);
   });
   viewerContent.addEventListener('touchend', () => {
+    lastPointerWasTouch = true;
     setTimeout(showSelectionButtonForSelection, 0);
   });
   viewerContent.addEventListener('scroll', hideSelectionButton);
@@ -2471,6 +2560,7 @@
 
   function hideHighlightPopover() {
     highlightPopover.classList.remove('visible');
+    undockElement(highlightPopover);
     popoverAnnotationId = null;
   }
 
@@ -2505,6 +2595,12 @@
       btn.classList.toggle('selected', btn.dataset.color === (ann.color || DEFAULT_HIGHLIGHT_COLOR));
     });
     highlightPopover.classList.add('visible');
+    if (lastPointerWasTouch) {
+      // 選択ツールバーと同じ理由で、タッチ操作では画面下端に固定する
+      dockElement(highlightPopover);
+      return;
+    }
+    undockElement(highlightPopover);
     const rect = anchorRect || getAnnotationRect(ann);
     if (rect) positionPopoverNear(rect);
   }
