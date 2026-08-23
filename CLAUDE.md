@@ -296,6 +296,31 @@ SWがcache-firstのため、プッシュしても「次に開いた時」まで�
 - **移行期の注意**: 実機に届いている旧SW(v7以前)にはこの仕組みが無いため、
   **v9への更新自体は従来通り「次に開いた時」に届く**。トーストが機能するのはv9以降の更新から
 
+## 読書進捗%表示(2026-08-23)
+
+Kindleの位置表示に相当するもの。本棚の各カードとビューアの両方に出す。
+
+- **全文字数(`bookLengths`)は既読位置(`readingPositions`)とあえて別管理**にした
+  (同期対象外・端末ローカルのキャッシュ、`IDB_KV_STORE`に`bookLengths`キーで保存)。
+  もし全文字数も`readingPositions`側に持たせて本を開くたびに`updatedAt`を更新すると、
+  「実際にはスクロールしていないのに更新時刻だけ進む」ことになり、Drive同期のマージ
+  (`updatedAt`が新しい方を丸ごと採用する設計)で**他端末の本当に新しい既読位置を
+  誤って上書きしかねない**。全文字数の更新頻度(本を開くたび)と既読位置の更新頻度
+  (実際にスクロールした時)を混ぜないことで、この経路を安全に保っている
+- **全文字数は本を開くたびに実測**する(`openViewer()`内、`getViewerPlainText().length`)。
+  fs/driveは開くまで本文を取得しないため、本棚側だけでは全文字数が分からない
+  ([`docs/md_viewer_development_plan.md`](docs/md_viewer_development_plan.md) §9.7に
+  あった設計判断)。そのため**一度もこの端末で開いていない本は進捗バー/%を出さない**
+  (`readingProgressPercent()`が`null`を返す)。原稿が編集されて長さが変わっても、
+  次に開いた時に自然に追従する
+- **ビューアの%バッジ**(`#viewer-progress`)は`position: fixed`でボトムバーの上・右端に置く。
+  選択ツールバーと同じ`dockBottomPx()`を流用して位置を実測する。
+  `#screen-viewer`の直下の要素にしてあるので、本棚画面(`#screen-viewer`ごと`display:none`)
+  や本文タップでのチロム非表示(`chrome-hidden`)で自動的に隠れる
+  (既存の`header`/`.bottom-bar`の非表示ルールに追加しただけ)
+- **本棚カードの進捗バー**(`.book-item-progress`)は`createBookItem()`で
+  `readingProgressPercent(file.bookId)`が`null`でない時だけ描画する
+
 ## 既知の制約と技術的負債
 
 - Drive連携は`https://`オリジン必須。ローカルの`index.html`を直接開いた場合、Driveパネルが理由と公開版URLを案内する

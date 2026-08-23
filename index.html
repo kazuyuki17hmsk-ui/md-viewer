@@ -103,7 +103,8 @@
   }
   /* 本文タップでUIを隠した状態(読書時は本文が画面100%) */
   #screen-viewer.chrome-hidden > header,
-  #screen-viewer.chrome-hidden > .bottom-bar {
+  #screen-viewer.chrome-hidden > .bottom-bar,
+  #screen-viewer.chrome-hidden > #viewer-progress {
     display: none;
   }
   /* 本棚一覧画面 */
@@ -163,6 +164,24 @@
     font-size: 0.7rem;
     color: #999;
     margin-top: 4px;
+  }
+  /* 本棚カードの読書進捗。全文字数を未取得(一度もこの端末で開いていない本)の時は出さない */
+  .book-item-progress {
+    height: 4px;
+    border-radius: 2px;
+    background: var(--border);
+    margin-top: 8px;
+    overflow: hidden;
+  }
+  .book-item-progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+  }
+  .book-item-progress-label {
+    font-size: 0.7rem;
+    color: #999;
+    margin-top: 3px;
   }
   .book-item-actions {
     display: flex;
@@ -923,6 +942,24 @@
     line-height: 1;
     opacity: 0.8;
   }
+
+  /* 読書進捗%(Kindleの位置表示に相当)。ボトムバーの右上に控えめに乗せる。
+     bottom は positionProgressBadge() が dockBottomPx() で実測してインラインで与える */
+  #viewer-progress {
+    display: none;
+    position: fixed;
+    right: 10px;
+    z-index: 850; /* ボトムバー・ヘッダーと同格。シート(900)を開いたら隠れてよい */
+    padding: 3px 9px;
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    font-size: 0.72rem;
+    pointer-events: none; /* 本文操作の邪魔をしない */
+  }
+  #viewer-progress.visible {
+    display: block;
+  }
   #viewer-content {
     flex: 1 1 auto;
     overflow-y: auto;
@@ -1073,6 +1110,9 @@
         <button id="btn-font-increase" class="btn-font" type="button" aria-label="文字を大きく">A+</button>
       </div>
     </nav>
+    <!-- 読書進捗%。position:fixedなので通常のフローには入らず、本文の高さを奪わない
+         (#screen-viewerがdisplay:noneになる本棚画面では、この子要素ごと自動的に非表示になる) -->
+    <div id="viewer-progress" aria-hidden="true"></div>
   </section>
 
   <!-- ボトムシート(本文の上に重なるので、開いても本文の高さは変わらない) -->
@@ -1147,7 +1187,7 @@
   // 本棚のタイトル横に表示する。実機で「どのビルドが動いているか」を確認するため
   // (Service Workerがcache-firstなので、更新が届いていないのか修正が効いていないのかを切り分ける)。
   // index.htmlを更新したらここと sw.js の CACHE_NAME を合わせて上げること。
-  const APP_VERSION = 'v9';
+  const APP_VERSION = 'v10';
 
   const screenBookshelf = document.getElementById('screen-bookshelf');
   const screenViewer = document.getElementById('screen-viewer');
@@ -1960,6 +2000,13 @@
   let annotations = {};         // { bookId: [annotation] } (init()でIndexedDBから読み込む)
   let readingPositions = {};    // { bookId: { offset, updatedAt } }
   let migratedBooks = {};       // { bookId: ISO日時 }
+  // 進捗%表示用の全文字数キャッシュ。{ bookId: number }。
+  // readingPositionsとは意図的に別管理にしている: もし全文字数もreadingPositions側に持たせて
+  // 本を開くたびにupdatedAtを更新すると、「実際にはスクロールしていないのに更新時刻だけ進む」
+  // ことになり、Drive同期のマージ(updatedAtが新しい方を全体採用)で他端末の本当に新しい
+  // 既読位置を誤って上書きしかねない。そのためbookLengthsは同期対象外・端末ローカルの
+  // 純粋なキャッシュとし、既読位置の信頼できる更新経路(saveReadingPosition)には一切触れない。
+  let bookLengths = {};
 
   // 「読書中」本棚。端末ローカルの閲覧履歴・ピン留めなので、バックアップJSONには含めない
   // (削除の同期にtombstoneが必要になるほどのデータではないため)。
@@ -2124,6 +2171,7 @@
     if (offset == null) return;
     readingPositions[currentFile.bookId] = { offset, updatedAt: nowIso() };
     persistReadingPositions();
+    updateProgressBadge(offset);
   }
   function flushReadingPosition() {
     clearTimeout(scrollSaveTimer);
@@ -2198,6 +2246,18 @@
   }
   function persistMigratedBooks() {
     saveIdbKV('migratedBooks', migratedBooks);
+  }
+  function persistBookLengths() {
+    saveIdbKV('bookLengths', bookLengths);
+  }
+
+  // 進捗%(0〜100の整数)。全文字数を未取得(=一度もこの端末で開いていない)、
+  // または既読位置が無ければ null(本棚では単に進捗バーを出さない)
+  function readingProgressPercent(bookId) {
+    const total = bookLengths[bookId];
+    const pos = readingPositions[bookId];
+    if (!total || !pos || typeof pos.offset !== 'number') return null;
+    return Math.max(0, Math.min(100, Math.round((pos.offset / total) * 100)));
   }
   function updateAnnotation(bookId, id, patch) {
     const list = annotations[bookId];
@@ -2954,6 +3014,7 @@
       panel.style.transform = keyboard > 1 ? `translateY(-${keyboard}px)` : '';
     });
     positionUpdateToast();
+    positionProgressBadge();
   }
 
   // 更新トーストもボトムバーの上に置く(本棚画面ではバーが無いので画面下端になる)
@@ -2961,6 +3022,28 @@
     const toast = document.getElementById('update-toast');
     if (!toast || !toast.classList.contains('visible')) return;
     toast.style.bottom = (dockBottomPx() + 8) + 'px';
+  }
+
+  // 読書進捗%のバッジ(Kindleの位置表示に相当)。ボトムバーの上・右端に置く。
+  // #viewer-progress は #screen-viewer の直下の要素なので、本棚画面では
+  // (screen-viewerごとdisplay:noneになるため)自動的に非表示になる。
+  const viewerProgressEl = document.getElementById('viewer-progress');
+  function positionProgressBadge() {
+    if (!viewerProgressEl.classList.contains('visible')) return;
+    viewerProgressEl.style.bottom = (dockBottomPx() + 8) + 'px';
+  }
+  // 開いている本のその時点のoffsetを直接受け取る(readingPositionsへの保存有無に関わらず
+  // 表示だけは即座に更新できるようにするため。例えば本を開いた直後はまだ保存前の値を渡す)
+  function updateProgressBadge(offset) {
+    const total = currentFile ? bookLengths[currentFile.bookId] : null;
+    if (!total || typeof offset !== 'number') {
+      viewerProgressEl.classList.remove('visible');
+      return;
+    }
+    const pct = Math.max(0, Math.min(100, Math.round((offset / total) * 100)));
+    viewerProgressEl.textContent = pct + '%';
+    viewerProgressEl.classList.add('visible');
+    positionProgressBadge();
   }
   if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', repositionDockedElements);
@@ -3360,11 +3443,19 @@
       renderMarkdown(text);
       buildToc();
       renderedHTML = viewerContent.innerHTML;
+      // 進捗%表示用に全文字数を記録する。本を開くたびに実測するので、原稿が編集されて
+      // 長さが変わっても自然に追従する(既読位置側のupdatedAtには触れないので同期には影響しない)。
+      const totalChars = getViewerPlainText().length;
+      if (totalChars > 0 && bookLengths[file.bookId] !== totalChars) {
+        bookLengths[file.bookId] = totalChars;
+        persistBookLengths();
+      }
       migrateLegacyBook(file.bookId); // 旧形式(px)のしおりがあれば文字オフセットへ変換
       rebuildContentLayers(); // 保存済みのハイライトを本文に適用
       renderAnnotationLists();
       const saved = readingPositions[file.bookId];
       scrollToOffset(saved ? saved.offset : 0);
+      updateProgressBadge(saved ? saved.offset : 0);
       pullBookInBackground(file.bookId);
     } catch (err) {
       viewerContent.textContent = 'ファイルの読み込みに失敗しました: ' + err.message;
@@ -3404,6 +3495,22 @@
     const nameEl = document.createElement('div');
     nameEl.textContent = file.name;
     item.appendChild(nameEl);
+
+    const progressPct = readingProgressPercent(file.bookId);
+    if (progressPct !== null) {
+      const progress = document.createElement('div');
+      progress.className = 'book-item-progress';
+      const fill = document.createElement('div');
+      fill.className = 'book-item-progress-fill';
+      fill.style.width = progressPct + '%';
+      progress.appendChild(fill);
+      item.appendChild(progress);
+
+      const progressLabel = document.createElement('div');
+      progressLabel.className = 'book-item-progress-label';
+      progressLabel.textContent = progressPct + '%';
+      item.appendChild(progressLabel);
+    }
 
     if (file.source === 'idb') {
       const sourceEl = document.createElement('div');
@@ -4042,6 +4149,8 @@
       annotations = await loadPersistedOrMigrate('annotations', ANNOTATIONS_KEY, {});
       readingPositions = await loadPersistedOrMigrate('readingPositions', READING_POS_V2_KEY, {});
       migratedBooks = await loadPersistedOrMigrate('migratedBooks', MIGRATED_BOOKS_KEY, {});
+      // bookLengthsは同期対象外の純粋なローカルキャッシュなので、localStorageの旧データは無い
+      bookLengths = (await idbKvGet('bookLengths')) || {};
     } catch (err) {
       // IndexedDBが完全に使えない場合、初期値({})のまま続行する
     }
