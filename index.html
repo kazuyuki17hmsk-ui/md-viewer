@@ -9,13 +9,64 @@
 <link rel="icon" href="icons/favicon-32.png" sizes="32x32">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <style>
+  /* テーマ(ライト/ダーク/セピア)。既定(data-theme無し)はセピアで、これは
+     アプリがずっと使ってきた元の配色をそのまま残したもの(既存ユーザーの見た目を変えない)。
+     --accent は「白文字と組み合わせる塗り(ヘッダー・ボトムバー・ボタン)」用に常に十分暗く保ち、
+     --accent-text は「本文の背景の上に直接乗る文字・細い枠線(見出し・リンク・ホバー色)」用。
+     ダークテーマでは同じ変数を1つにまとめると「白文字が読めるくらい暗い色」と
+     「暗い背景の上で読めるくらい明るい色」を同時に満たせないため、2つに分けている。
+     ハイライトの4色(黄緑青ピンク)と検索ハイライト・注釈のドット等の配色はテーマ間で
+     変えない(ハイライト文字色は常に--mark-fgで固定の濃色にするため、素材の色自体は
+     どのテーマでも同じ見た目で成立する) */
   :root {
     --bg: #f5f1e8;
     --fg: #2b2b2b;
-    --accent: #6b4f3b;
+    --surface: #ffffff;      /* カード・シート・ポップオーバーの背景 */
     --border: #ddd4c0;
+    --muted: #888888;        /* 補足情報・メタ情報の文字 */
+    --danger: #aa3333;       /* 削除・エラー */
+    --overlay: rgba(0, 0, 0, 0.28); /* シートの背景暗幕 */
+    --accent: #6b4f3b;
+    --accent-text: #6b4f3b;
+    --accent-tint: rgba(107, 79, 59, 0.08); /* バナー・コード片等の薄いアクセント色の下地 */
+    --mark-fg: #2b2b2b;      /* ハイライト・検索ヒットの文字色。背景が常に明るいパステルなので固定 */
+  }
+  /* ライト: 純白ベース。セピアと同じアクセントカラーでブランドの一貫性を保つ */
+  :root[data-theme="light"] {
+    --bg: #ffffff;
+    --fg: #202020;
+    --surface: #ffffff;
+    --border: #e2e2e2;
+    --muted: #737373;
+    --danger: #b3261e;
+    --overlay: rgba(0, 0, 0, 0.28);
+    --accent: #6b4f3b;
+    --accent-text: #6b4f3b;
+    --accent-tint: rgba(107, 79, 59, 0.06);
+  }
+  /* ダーク: 暖色寄りの黒(ニュートラルグレーにせず、ブランドの色温度をわずかに残す)。
+     --accentはヘッダー等の塗りが暗い背景に埋もれない程度に明るくしつつ白文字も保てる中間の濃さ、
+     --accent-textはさらに明るくして本文背景に直接乗る文字の可読性を確保する */
+  :root[data-theme="dark"] {
+    --bg: #17130f;
+    --fg: #e8e1d3;
+    --surface: #241f17;
+    --border: #3c3327;
+    --muted: #a89a83;
+    --danger: #e2776b;
+    --overlay: rgba(0, 0, 0, 0.6);
+    --accent: #8a6244;
+    --accent-text: #d9a878;
+    --accent-tint: rgba(217, 168, 120, 0.12);
+    --mark-fg: #2b2b2b;
   }
   * { box-sizing: border-box; }
+  /* テキスト系フォームはブラウザ既定(白地に黒文字)のままだと、ダークテーマの時だけ
+     周囲から浮いて見える。チェックボックス等は対象にしない(ネイティブ外観を保つ) */
+  input[type="text"], textarea {
+    background: var(--surface);
+    color: var(--fg);
+  }
   html, body {
     margin: 0;
     padding: 0;
@@ -117,7 +168,7 @@
   .bookshelf-section-title {
     font-size: 0.95rem;
     font-weight: bold;
-    color: var(--accent);
+    color: var(--accent-text);
     margin: 0 0 10px;
   }
   .book-grid {
@@ -131,7 +182,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-    background: rgba(107, 79, 59, 0.08);
+    background: var(--accent-tint);
     border: 1px solid var(--border);
     border-radius: 6px;
     padding: 10px 14px;
@@ -149,7 +200,7 @@
   }
   .book-item {
     position: relative;
-    background: #fff;
+    background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 6px;
     padding: 16px 12px;
@@ -158,11 +209,11 @@
     word-break: break-all;
   }
   .book-item:hover {
-    border-color: var(--accent);
+    border-color: var(--accent-text);
   }
   .book-item-source {
     font-size: 0.7rem;
-    color: #999;
+    color: var(--muted);
     margin-top: 4px;
   }
   /* 本棚カードの読書進捗。全文字数を未取得(一度もこの端末で開いていない本)の時は出さない */
@@ -180,7 +231,7 @@
   }
   .book-item-progress-label {
     font-size: 0.7rem;
-    color: #999;
+    color: var(--muted);
     margin-top: 3px;
   }
   .book-item-actions {
@@ -192,7 +243,7 @@
   .book-item-pin {
     background: none;
     border: 1px solid var(--border);
-    color: var(--accent);
+    color: var(--accent-text);
     font-size: 0.75rem;
     padding: 2px 10px;
     border-radius: 4px;
@@ -206,7 +257,7 @@
   .book-item-delete {
     background: none;
     border: 1px solid var(--border);
-    color: #a33;
+    color: var(--danger);
     font-size: 0.75rem;
     padding: 2px 10px;
     border-radius: 4px;
@@ -216,7 +267,7 @@
   /* バックアップパネル */
   .backup-panel {
     display: none;
-    background: #fff;
+    background: var(--surface);
     border-bottom: 1px solid var(--border);
     padding: 16px;
   }
@@ -235,7 +286,34 @@
   .backup-note {
     margin: 10px 0 0;
     font-size: 0.85rem;
-    color: #777;
+    color: var(--muted);
+  }
+
+  /* 表示テーマ(ライト/セピア/ダーク)の切り替え。本棚(バックアップパネル内)・
+     ビューア(専用シート)の両方に同じ見た目のセグメントボタンを置く */
+  .theme-section {
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+  }
+  .theme-picker {
+    display: flex;
+    gap: 8px;
+  }
+  .theme-picker button {
+    flex: 1;
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--fg);
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  .theme-picker button.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
   }
 
   /* Drive同期(appDataFolder) */
@@ -265,16 +343,16 @@
   }
   .sync-status {
     font-size: 0.85rem;
-    color: #777;
+    color: var(--muted);
   }
   .sync-status.error {
-    color: #a33;
+    color: var(--danger);
   }
 
   /* Google Driveパネル */
   .drive-panel {
     display: none;
-    background: #fff;
+    background: var(--surface);
     border-bottom: 1px solid var(--border);
     padding: 16px;
   }
@@ -284,13 +362,13 @@
   .drive-breadcrumb {
     margin-bottom: 10px;
     font-size: 0.9rem;
-    color: #555;
+    color: var(--muted);
   }
   .drive-breadcrumb-item {
     cursor: pointer;
   }
   .drive-breadcrumb-item:hover {
-    color: var(--accent);
+    color: var(--accent-text);
     text-decoration: underline;
   }
   #drive-folder-list {
@@ -309,10 +387,10 @@
     border-bottom: none;
   }
   #drive-folder-list li:hover {
-    color: var(--accent);
+    color: var(--accent-text);
   }
   .drive-empty {
-    color: #888;
+    color: var(--muted);
     cursor: default !important;
   }
   .drive-actions button {
@@ -331,7 +409,7 @@
   .drive-message {
     display: none;
     font-size: 0.9rem;
-    color: #a33;
+    color: var(--danger);
     line-height: 1.6;
   }
   .drive-message.open {
@@ -342,7 +420,7 @@
   }
   .drive-message a {
     display: inline-block;
-    color: var(--accent);
+    color: var(--accent-text);
     word-break: break-all;
   }
   .drive-message .drive-retry {
@@ -361,7 +439,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-    background: rgba(107, 79, 59, 0.08);
+    background: var(--accent-tint);
     border: 1px solid var(--border);
     border-radius: 6px;
     padding: 8px 12px;
@@ -389,7 +467,7 @@
   .empty-state {
     padding: 40px 16px;
     text-align: center;
-    color: #888;
+    color: var(--muted);
   }
 
   /* 本棚画面のヘッダーボタン群 */
@@ -440,6 +518,14 @@
       padding: 11px 1px;
     }
   }
+  /* 「表示」ボタン追加で8個になり、iPhone SE等の375px幅では「ハイライト」(5文字)が
+     0.7remでも収まらなくなったため、さらに詰める */
+  @media (max-width: 390px) {
+    .bottom-bar button {
+      font-size: 0.62rem;
+      padding: 11px 0;
+    }
+  }
 
   /* ボトムシート(目次・検索・しおり・ハイライト)。本文の上に重ねるので本文の高さを奪わない */
   .sheet {
@@ -453,7 +539,7 @@
     margin: 0 auto;
     max-height: 60vh;
     overflow-y: auto;
-    background: #fff;
+    background: var(--surface);
     border-top: 1px solid var(--border);
     border-radius: 12px 12px 0 0;
     box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.18);
@@ -479,7 +565,7 @@
     position: fixed;
     inset: 0;
     z-index: 890;
-    background: rgba(0, 0, 0, 0.28);
+    background: var(--overlay);
     opacity: 0;
     visibility: hidden;
     transition: opacity 0.22s ease, visibility 0s linear 0.22s;
@@ -585,7 +671,7 @@
     min-width: 0;
   }
   .bookmark-item-main:hover {
-    color: var(--accent);
+    color: var(--accent-text);
   }
   .bookmark-item-label {
     overflow: hidden;
@@ -601,10 +687,10 @@
   }
   .ann-dot-bookmark {
     background: none;
-    border: 2px solid var(--accent);
+    border: 2px solid var(--accent-text);
   }
   .bookmark-empty {
-    color: #888;
+    color: var(--muted);
     padding: 8px 4px;
   }
   .bookmark-item-actions {
@@ -621,10 +707,10 @@
     padding: 4px 8px;
   }
   .bookmark-note-edit {
-    color: #777;
+    color: var(--muted);
   }
   .bookmark-delete {
-    color: #a33;
+    color: var(--danger);
   }
 
   /* ハイライトパネル。しおり(1行)と違い、引用とメモを本のように読める大きさで見せる */
@@ -654,13 +740,13 @@
     overflow: hidden;
   }
   .hl-item-quote:hover {
-    color: var(--accent);
+    color: var(--accent-text);
   }
   .hl-item-note {
     margin: 8px 0 0 14px;
     padding: 9px 11px;
     border-radius: 6px;
-    background: rgba(107, 79, 59, 0.07);
+    background: var(--accent-tint);
     font-size: 0.9rem;
     line-height: 1.8;
     white-space: pre-wrap;   /* メモ内の改行をそのまま見せる */
@@ -668,7 +754,7 @@
     cursor: text;
   }
   .hl-item-note.empty {
-    color: #999;
+    color: var(--muted);
     font-style: italic;
   }
   /* インライン編集。メモ欄をタップするとこのtextareaに差し替わる */
@@ -679,9 +765,9 @@
     max-width: calc(100% - 14px);
     padding: 9px 11px;
     box-sizing: border-box;
-    border: 1px solid var(--accent);
+    border: 1px solid var(--accent-text);
     border-radius: 6px;
-    background: #fff;
+    background: var(--surface);
     font-family: inherit;
     font-size: 0.9rem;
     line-height: 1.8;
@@ -698,7 +784,7 @@
     flex: 1;
     align-self: center;
     font-size: 0.75rem;
-    color: #999;
+    color: var(--muted);
   }
 
   /* 目次パネル */
@@ -717,10 +803,10 @@
     border-bottom: none;
   }
   #toc-list li:hover {
-    color: var(--accent);
+    color: var(--accent-text);
   }
   .toc-empty {
-    color: #888;
+    color: var(--muted);
     padding: 8px 4px;
     cursor: default;
   }
@@ -746,14 +832,16 @@
   }
   #search-count {
     font-size: 0.85rem;
-    color: #555;
+    color: var(--muted);
     white-space: nowrap;
     min-width: 3.5em;
     text-align: center;
   }
+  /* mark系の背景は常に明るいパステルなので、文字色はテーマに関わらず--mark-fgで固定する。
+     ダークテーマの--fg(明るい色)をinheritすると、明るい背景に明るい文字で読めなくなる */
   #viewer-content mark.search-hit {
     background: #ffe58a;
-    color: inherit;
+    color: var(--mark-fg);
     border-radius: 2px;
   }
   #viewer-content mark.search-hit.active {
@@ -762,7 +850,7 @@
 
   /* ハイライト(注釈)。検索ハイライトより下のレイヤーとして本文に重ねる */
   #viewer-content mark.hl {
-    color: inherit;
+    color: var(--mark-fg);
     border-radius: 2px;
     padding: 0 1px;
     cursor: pointer;
@@ -835,7 +923,7 @@
     z-index: 1000;
     flex-direction: column;
     gap: 8px;
-    background: #fff;
+    background: var(--surface);
     border-radius: 10px;
     padding: 10px;
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
@@ -886,7 +974,7 @@
     align-self: flex-start;
     background: none;
     border: none;
-    color: #a33;
+    color: var(--danger);
     cursor: pointer;
     font-size: 0.85rem;
     padding: 2px;
@@ -926,6 +1014,9 @@
     font-size: 0.85rem;
   }
   #update-toast-reload {
+    /* var(--surface)にしない: --accentのテキストは常に「白系の上に置いても読める濃さ」を
+       保証しているため、あえて固定の白背景に乗せるのが最も確実にコントラストを保てる
+       (ダークテーマの--surfaceは暗色なので、--accentの文字色との組み合わせが読みにくくなる) */
     background: #fff;
     color: var(--accent);
     border: none;
@@ -983,7 +1074,7 @@
   #viewer-content h6 {
     line-height: 1.5;
     margin: 1.6em 0 0.8em;
-    color: var(--accent);
+    color: var(--accent-text);
   }
   #viewer-content h1 { font-size: 1.6em; }
   #viewer-content h2 { font-size: 1.4em; }
@@ -1012,7 +1103,7 @@
     margin-left: 0;
     padding: 0.2em 1em;
     border-left: 4px solid var(--border);
-    color: #555;
+    color: var(--muted);
   }
   /* 空行なしで連続する引用行(脚注【注1】【注2】…等)はMarkdown上1つの段落に結合されるため、
      改行だけは保持して見た目でも1行=1項目に分かれるようにする(実際の翻訳原稿で確認) */
@@ -1020,13 +1111,13 @@
     white-space: pre-line;
   }
   #viewer-content code {
-    background: rgba(107, 79, 59, 0.1);
+    background: var(--accent-tint);
     padding: 0.15em 0.4em;
     border-radius: 3px;
     font-size: 0.9em;
   }
   #viewer-content pre {
-    background: #fff;
+    background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 6px;
     padding: 12px;
@@ -1075,6 +1166,14 @@
       <button id="btn-backup-import" type="button">バックアップをインポート</button>
       <input type="file" id="backup-import-input" accept=".json" style="display: none;">
       <p class="backup-note">しおり・既読位置・フォントサイズ設定をJSONファイルに保存/復元します(端末間の手動同期やバックアップ用)。インポートは既存のしおりを上書きせず、更新日時の新しい方を採用してマージします。</p>
+      <div class="theme-section">
+        <div class="theme-picker" id="theme-picker-bookshelf">
+          <button type="button" data-theme-value="sepia">セピア</button>
+          <button type="button" data-theme-value="light">ライト</button>
+          <button type="button" data-theme-value="dark">ダーク</button>
+        </div>
+        <p class="backup-note">表示テーマはこの端末だけの設定です(バックアップ・同期の対象外)。</p>
+      </div>
       <div class="sync-section">
         <label class="sync-toggle">
           <input type="checkbox" id="drive-sync-toggle">
@@ -1106,6 +1205,7 @@
         <button id="btn-search-toggle" type="button">検索</button>
         <button id="btn-bookmark-toggle" type="button">しおり</button>
         <button id="btn-highlight-toggle" type="button">ハイライト</button>
+        <button id="btn-theme-toggle" type="button">表示</button>
         <button id="btn-font-decrease" class="btn-font" type="button" aria-label="文字を小さく">A-</button>
         <button id="btn-font-increase" class="btn-font" type="button" aria-label="文字を大きく">A+</button>
       </div>
@@ -1155,6 +1255,15 @@
     <ul id="highlight-list"></ul>
   </div>
 
+  <div id="theme-panel" class="sheet">
+    <div class="sheet-handle"></div>
+    <div class="theme-picker" id="theme-picker-viewer">
+      <button type="button" data-theme-value="sepia">セピア</button>
+      <button type="button" data-theme-value="light">ライト</button>
+      <button type="button" data-theme-value="dark">ダーク</button>
+    </div>
+  </div>
+
   <div id="selection-toolbar">
     <button id="selection-inpage-search-btn" type="button">文中検索</button>
     <button id="selection-highlight-btn" type="button">ハイライト</button>
@@ -1187,7 +1296,7 @@
   // 本棚のタイトル横に表示する。実機で「どのビルドが動いているか」を確認するため
   // (Service Workerがcache-firstなので、更新が届いていないのか修正が効いていないのかを切り分ける)。
   // index.htmlを更新したらここと sw.js の CACHE_NAME を合わせて上げること。
-  const APP_VERSION = 'v10';
+  const APP_VERSION = 'v11';
 
   const screenBookshelf = document.getElementById('screen-bookshelf');
   const screenViewer = document.getElementById('screen-viewer');
@@ -1206,6 +1315,8 @@
   const btnHighlightToggle = document.getElementById('btn-highlight-toggle');
   const highlightPanel = document.getElementById('highlight-panel');
   const highlightListEl = document.getElementById('highlight-list');
+  const btnThemeToggle = document.getElementById('btn-theme-toggle');
+  const themePanel = document.getElementById('theme-panel');
   const btnTocToggle = document.getElementById('btn-toc-toggle');
   const tocPanel = document.getElementById('toc-panel');
   const tocListEl = document.getElementById('toc-list');
@@ -2692,7 +2803,8 @@
     toc: { panel: tocPanel, button: btnTocToggle },
     search: { panel: searchPanel, button: btnSearchToggle },
     bookmark: { panel: bookmarkPanel, button: btnBookmarkToggle },
-    highlight: { panel: highlightPanel, button: btnHighlightToggle }
+    highlight: { panel: highlightPanel, button: btnHighlightToggle },
+    theme: { panel: themePanel, button: btnThemeToggle }
   };
 
   function isSheetOpen(name) {
@@ -2738,6 +2850,7 @@
 
   btnBookmarkToggle.addEventListener('click', () => toggleSheet('bookmark'));
   btnHighlightToggle.addEventListener('click', () => toggleSheet('highlight'));
+  btnThemeToggle.addEventListener('click', () => toggleSheet('theme'));
   btnBookmarkAdd.addEventListener('click', addBookmark);
 
   // ファイル内検索
@@ -3290,6 +3403,38 @@
   btnFontDecrease.addEventListener('click', () => changeFontSize(-FONT_SIZE_STEP));
   btnFontIncrease.addEventListener('click', () => changeFontSize(FONT_SIZE_STEP));
   applyFontSize();
+
+  // 表示テーマ(ライト/セピア/ダーク)。フォントサイズと同じく端末ローカルの表示設定なので
+  // localStorageのみ(バックアップJSON・Drive同期の対象外。ピン留め等と同じ扱い)。
+  const THEME_KEY = 'mdViewer.theme';
+  const THEME_DEFAULT = 'sepia';
+  const THEME_ACCENT_COLOR = { sepia: '#6b4f3b', light: '#6b4f3b', dark: '#8a6244' };
+  const themeMetaEl = document.querySelector('meta[name="theme-color"]');
+  const themePickerButtons = document.querySelectorAll('.theme-picker button[data-theme-value]');
+
+  let currentTheme = localStorage.getItem(THEME_KEY) || THEME_DEFAULT;
+  if (!(currentTheme in THEME_ACCENT_COLOR)) currentTheme = THEME_DEFAULT;
+
+  function applyTheme(theme) {
+    currentTheme = theme;
+    document.documentElement.setAttribute('data-theme', theme);
+    // OSのステータスバー・PWAのタスク切替時のカード色もヘッダーの実際の色に合わせる
+    if (themeMetaEl) themeMetaEl.setAttribute('content', THEME_ACCENT_COLOR[theme]);
+    themePickerButtons.forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.themeValue === theme);
+    });
+  }
+
+  function changeTheme(theme) {
+    if (!(theme in THEME_ACCENT_COLOR)) return;
+    localStorage.setItem(THEME_KEY, theme);
+    applyTheme(theme);
+  }
+
+  themePickerButtons.forEach(btn => {
+    btn.addEventListener('click', () => changeTheme(btn.dataset.themeValue));
+  });
+  applyTheme(currentTheme);
 
   // 表示崩れの診断用。実機(iPhone等)は開発者ツールが使えないため、
   // タイトルを3回連続タップすると実測値をalertで表示する。
