@@ -805,6 +805,13 @@
   #toc-list li:hover {
     color: var(--accent-text);
   }
+  /* 目次を開いた時に「今読んでいる章」を示す。box-shadowなのはpadding-leftが
+     見出しレベルごとにJSでインライン指定されており、borderだと食い込んでズレるため */
+  #toc-list li.current {
+    color: var(--accent-text);
+    font-weight: bold;
+    box-shadow: inset 3px 0 0 var(--accent-text);
+  }
   .toc-empty {
     color: var(--muted);
     padding: 8px 4px;
@@ -1296,7 +1303,7 @@
   // 本棚のタイトル横に表示する。実機で「どのビルドが動いているか」を確認するため
   // (Service Workerがcache-firstなので、更新が届いていないのか修正が効いていないのかを切り分ける)。
   // index.htmlを更新したらここと sw.js の CACHE_NAME を合わせて上げること。
-  const APP_VERSION = 'v11';
+  const APP_VERSION = 'v12';
 
   const screenBookshelf = document.getElementById('screen-bookshelf');
   const screenViewer = document.getElementById('screen-viewer');
@@ -3028,8 +3035,21 @@
     return HEADING_MARKER_RE.test(text.trim());
   }
 
+  // 見出し要素の、viewerContent内プレーンテキスト先頭からの文字数オフセット。
+  // 「今読んでいる章はどれか」を既読位置(同じくプレーンテキストの文字オフセット基準)と
+  // 比較するために使う(getTextOffsetInViewer()と同じ考え方だが、Rangeではなく要素そのものが起点)
+  function getElementOffsetInViewer(el) {
+    const preRange = document.createRange();
+    preRange.selectNodeContents(viewerContent);
+    preRange.setEnd(el, 0);
+    return preRange.toString().length;
+  }
+
+  let tocEntries = []; // [{ li, offset }]。目次を開くたびに現在地ハイライトの計算に使う
+
   function buildToc() {
     tocListEl.innerHTML = '';
+    tocEntries = [];
     const headings = viewerContent.querySelectorAll('h1, h2, h3, h4, h5, h6');
     if (headings.length === 0) {
       const li = document.createElement('li');
@@ -3061,6 +3081,7 @@
         closeAllSheets();
       });
       tocListEl.appendChild(li);
+      tocEntries.push({ li, offset: getElementOffsetInViewer(heading) });
 
       if (!isMarker) {
         ancestorByLevel[level] = text;
@@ -3069,7 +3090,25 @@
     });
   }
 
-  btnTocToggle.addEventListener('click', () => toggleSheet('toc'));
+  // 目次を開いた時に「今読んでいる章」をハイライトし、そこへスクロールする。
+  // tocEntriesは見出し出現順(=オフセット昇順)なので、現在地以下で最後の見出しが今いる章になる
+  function highlightCurrentTocEntry() {
+    if (tocEntries.length === 0) return;
+    const offset = getOffsetAtViewportTop();
+    if (offset == null) return;
+    let current = tocEntries[0];
+    for (const entry of tocEntries) {
+      if (entry.offset <= offset) current = entry;
+      else break;
+    }
+    tocEntries.forEach(entry => entry.li.classList.toggle('current', entry === current));
+    current.li.scrollIntoView({ block: 'center' });
+  }
+
+  btnTocToggle.addEventListener('click', () => {
+    toggleSheet('toc');
+    if (isSheetOpen('toc')) highlightCurrentTocEntry();
+  });
 
   // 選択テキストの文中検索・ハイライト
   let pendingSelectionText = '';
