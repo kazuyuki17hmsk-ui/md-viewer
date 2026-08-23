@@ -844,6 +844,39 @@
     min-width: 3.5em;
     text-align: center;
   }
+  /* 検索結果一覧。前後の文脈付きで並べ、タップでその箇所へジャンプする */
+  #search-results-list {
+    list-style: none;
+    margin: 12px 0 0;
+    padding: 0;
+  }
+  .search-result-item {
+    padding: 9px 4px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    line-height: 1.6;
+    font-size: 0.88rem;
+    /* 文脈込みで長くなりがちなので、1件あたりは2行までにして一覧性を保つ */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .search-result-item:last-child {
+    border-bottom: none;
+  }
+  .search-result-item:hover {
+    color: var(--accent-text);
+  }
+  .search-result-item.active {
+    background: var(--accent-tint);
+  }
+  .search-result-item mark.search-result-hit {
+    background: #ffe58a;
+    color: var(--mark-fg);
+    border-radius: 2px;
+    font-weight: bold;
+  }
   /* mark系の背景は常に明るいパステルなので、文字色はテーマに関わらず--mark-fgで固定する。
      ダークテーマの--fg(明るい色)をinheritすると、明るい背景に明るい文字で読めなくなる */
   #viewer-content mark.search-hit {
@@ -1238,6 +1271,7 @@
       <button id="btn-search-prev" type="button" aria-label="前へ">↑</button>
       <button id="btn-search-next" type="button" aria-label="次へ">↓</button>
     </div>
+    <ul id="search-results-list"></ul>
   </div>
 
   <div id="bookmark-panel" class="sheet">
@@ -1303,7 +1337,7 @@
   // 本棚のタイトル横に表示する。実機で「どのビルドが動いているか」を確認するため
   // (Service Workerがcache-firstなので、更新が届いていないのか修正が効いていないのかを切り分ける)。
   // index.htmlを更新したらここと sw.js の CACHE_NAME を合わせて上げること。
-  const APP_VERSION = 'v12';
+  const APP_VERSION = 'v13';
 
   const screenBookshelf = document.getElementById('screen-bookshelf');
   const screenViewer = document.getElementById('screen-viewer');
@@ -1331,6 +1365,7 @@
   const searchPanel = document.getElementById('search-panel');
   const searchInput = document.getElementById('search-input');
   const searchCountEl = document.getElementById('search-count');
+  const searchResultsListEl = document.getElementById('search-results-list');
   const btnSearchPrev = document.getElementById('btn-search-prev');
   const btnSearchNext = document.getElementById('btn-search-next');
   const sheetBackdrop = document.getElementById('sheet-backdrop');
@@ -2840,6 +2875,16 @@
     sheetBackdrop.classList.add('open');
   }
 
+  // 検索結果一覧から他の項目を見比べたい場合があるため、一覧タップでのジャンプは
+  // closeAllSheets()(=closeSearch()でハイライト・検索語を全部消す)を通さず、
+  // シートを見た目だけ閉じる。再度「検索」を開けば同じ検索結果に戻れる
+  function hideSheetVisualOnly(name) {
+    SHEETS[name].panel.style.transform = '';
+    SHEETS[name].panel.classList.remove('open');
+    SHEETS[name].button.classList.remove('active');
+    sheetBackdrop.classList.remove('open');
+  }
+
   function toggleSheet(name) {
     if (isSheetOpen(name)) {
       closeAllSheets();
@@ -2868,6 +2913,7 @@
   const SEARCH_MIN_LENGTH = 2; // 1文字だけの検索は該当が多すぎて重い上、絞り込みの意味も薄い
   const SEARCH_MAX_MATCHES = 500; // 62万字級の原稿で頻出語を検索すると数千マークになり得るため上限を設ける
   const SEARCH_DEBOUNCE_MS = 250;
+  const SEARCH_RESULT_CONTEXT_LEN = 24; // 結果一覧に出す前後の文脈の長さ(文字数)
 
   function escapeRegExp(str) {
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -2883,13 +2929,54 @@
   }
 
   function updateActiveMatch() {
-    searchMatches.forEach(m => m.el.classList.remove('active'));
+    searchMatches.forEach(m => {
+      m.el.classList.remove('active');
+      if (m.li) m.li.classList.remove('active');
+    });
     if (currentMatchIndex >= 0 && searchMatches[currentMatchIndex]) {
-      const active = searchMatches[currentMatchIndex].el;
-      active.classList.add('active');
-      active.scrollIntoView({ block: 'center' });
+      const active = searchMatches[currentMatchIndex];
+      active.el.classList.add('active');
+      active.el.scrollIntoView({ block: 'center' });
+      if (active.li) {
+        active.li.classList.add('active');
+        active.li.scrollIntoView({ block: 'nearest' }); // 一覧側だけをスクロールし、本文の位置は動かさない
+      }
     }
     updateSearchCount();
+  }
+
+  // 検索ヒット(<mark>)の直前・直後の生テキストから文脈を切り出す。
+  // highlightMatches()でDOMに挿入した後に呼ぶ前提(前後の兄弟ノードを直接読むだけの軽い処理にするため、
+  // 正規表現ループの中で別途スニペットを保持するより単純)
+  function renderSearchResultsList() {
+    searchResultsListEl.innerHTML = '';
+    searchMatches.forEach((match, i) => {
+      const before = (match.el.previousSibling && match.el.previousSibling.nodeType === Node.TEXT_NODE)
+        ? match.el.previousSibling.nodeValue : '';
+      const after = (match.el.nextSibling && match.el.nextSibling.nodeType === Node.TEXT_NODE)
+        ? match.el.nextSibling.nodeValue : '';
+      const beforeSnip = before.slice(Math.max(0, before.length - SEARCH_RESULT_CONTEXT_LEN)).replace(/\s+/g, ' ');
+      const afterSnip = after.slice(0, SEARCH_RESULT_CONTEXT_LEN).replace(/\s+/g, ' ');
+
+      const li = document.createElement('li');
+      li.className = 'search-result-item';
+      if (before.length > SEARCH_RESULT_CONTEXT_LEN) li.appendChild(document.createTextNode('…'));
+      li.appendChild(document.createTextNode(beforeSnip));
+      const hit = document.createElement('mark');
+      hit.className = 'search-result-hit';
+      hit.textContent = match.el.textContent;
+      li.appendChild(hit);
+      li.appendChild(document.createTextNode(afterSnip));
+      if (after.length > SEARCH_RESULT_CONTEXT_LEN) li.appendChild(document.createTextNode('…'));
+
+      li.addEventListener('click', () => {
+        currentMatchIndex = i;
+        updateActiveMatch();
+        hideSheetVisualOnly('search');
+      });
+      match.li = li;
+      searchResultsListEl.appendChild(li);
+    });
   }
 
   // 本文プレーンテキスト上でのオフセット(文字数)を基準に、その直後の最初の一致にジャンプする
@@ -2908,11 +2995,13 @@
     searchTruncated = false;
     if (!query) {
       updateSearchCount();
+      renderSearchResultsList();
       return;
     }
     if (query.length < SEARCH_MIN_LENGTH) {
       // 1文字検索は結果が多すぎて重い上に絞り込みにもならないため、様子見の表示だけ出す
       searchCountEl.textContent = '…';
+      renderSearchResultsList();
       return;
     }
     const regex = new RegExp(escapeRegExp(query), 'gi');
@@ -2957,6 +3046,7 @@
       textNode.parentNode.replaceChild(frag, textNode);
     }
 
+    renderSearchResultsList(); // アクティブ行の判定(match.li)より前に一覧を作っておく
     if (searchMatches.length > 0) {
       currentMatchIndex = 0;
       updateActiveMatch();
@@ -2980,6 +3070,7 @@
     currentMatchIndex = -1;
     searchTruncated = false;
     updateSearchCount();
+    renderSearchResultsList();
   }
 
   // 日本語入力(IME)の変換中は 'input' が候補の確定前から何度も発火するため、
@@ -3611,6 +3702,7 @@
     currentMatchIndex = -1;
     searchTruncated = false;
     updateSearchCount();
+    renderSearchResultsList();
     hideSelectionButton();
     setChromeVisible(true); // 本文非表示のまま次の本に移ると戻り方が分からなくなる
     showScreen(screenViewer);
