@@ -1,5 +1,5 @@
 // キャッシュ名はバージョン文字列を含める。中身(プリキャッシュ対象)を更新したらこの文字列を上げること。
-const CACHE_NAME = 'md-viewer-v6';
+const CACHE_NAME = 'md-viewer-v7';
 const PRECACHE_URLS = [
   './',
   './index.html',

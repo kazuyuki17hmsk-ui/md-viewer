@@ -1090,7 +1090,7 @@
   // 本棚のタイトル横に表示する。実機で「どのビルドが動いているか」を確認するため
   // (Service Workerがcache-firstなので、更新が届いていないのか修正が効いていないのかを切り分ける)。
   // index.htmlを更新したらここと sw.js の CACHE_NAME を合わせて上げること。
-  const APP_VERSION = 'v6';
+  const APP_VERSION = 'v7';
 
   const screenBookshelf = document.getElementById('screen-bookshelf');
   const screenViewer = document.getElementById('screen-viewer');
@@ -2078,6 +2078,18 @@
     scrollSaveTimer = setTimeout(saveReadingPosition, 300);
   });
   window.addEventListener('beforeunload', flushReadingPosition);
+  // モバイルではタブを切り替えるとOSがプロセスごと終了させることが多く、
+  // beforeunloadが発火しないまま既読位置が失われる。hidden化のタイミングでも保存する。
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'hidden') return;
+    flushReadingPosition();
+    // 同期待ちがあれば、バックグラウンド化される前にdebounceを待たず送信を開始する
+    // (モバイルでは背後でタイマーが止まる/プロセスごと終了することがあるため)。
+    if (pendingSyncBooks.size > 0) {
+      clearTimeout(syncPushTimer);
+      runPendingSync();
+    }
+  });
 
   // 端末間マージの中核。バックアップJSONのインポートとDrive同期の両方から使う。
   // 注釈id単位で updatedAt の新しい方を採用し、削除(deleted)も「新しい更新」として尊重する。
@@ -2615,15 +2627,22 @@
   let renderedHTML = ''; // 検索ハイライトをリセットするための素のレンダリング結果
   let searchMatches = [];
   let currentMatchIndex = -1;
+  let searchTruncated = false; // 上限件数で打ち切ったか(件数表示に反映する)
+  const SEARCH_MIN_LENGTH = 2; // 1文字だけの検索は該当が多すぎて重い上、絞り込みの意味も薄い
+  const SEARCH_MAX_MATCHES = 500; // 62万字級の原稿で頻出語を検索すると数千マークになり得るため上限を設ける
+  const SEARCH_DEBOUNCE_MS = 250;
 
   function escapeRegExp(str) {
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
   function updateSearchCount() {
-    searchCountEl.textContent = searchMatches.length === 0
-      ? '0/0'
-      : `${currentMatchIndex + 1}/${searchMatches.length}`;
+    if (searchMatches.length === 0) {
+      searchCountEl.textContent = '0/0';
+      return;
+    }
+    const total = searchTruncated ? `${searchMatches.length}+` : `${searchMatches.length}`;
+    searchCountEl.textContent = `${currentMatchIndex + 1}/${total}`;
   }
 
   function updateActiveMatch() {
@@ -2649,8 +2668,14 @@
     rebuildContentLayers(); // 素のHTML → 注釈ハイライトを適用してから、検索ハイライトを重ねる
     searchMatches = [];
     currentMatchIndex = -1;
+    searchTruncated = false;
     if (!query) {
       updateSearchCount();
+      return;
+    }
+    if (query.length < SEARCH_MIN_LENGTH) {
+      // 1文字検索は結果が多すぎて重い上に絞り込みにもならないため、様子見の表示だけ出す
+      searchCountEl.textContent = '…';
       return;
     }
     const regex = new RegExp(escapeRegExp(query), 'gi');
@@ -2661,17 +2686,24 @@
       textNodes.push(node);
     }
     let cumulativeOffset = 0;
-    textNodes.forEach(textNode => {
+    for (const textNode of textNodes) {
       const text = textNode.nodeValue;
       const nodeStartOffset = cumulativeOffset;
       cumulativeOffset += text.length;
+      // 上限に達した後もオフセット計算(上のcumulativeOffset加算)だけは続け、
+      // マーク作成(重いDOM操作)はスキップする
+      if (searchTruncated) continue;
       regex.lastIndex = 0;
-      if (!regex.test(text)) return;
+      if (!regex.test(text)) continue;
       regex.lastIndex = 0;
       const frag = document.createDocumentFragment();
       let lastIndex = 0;
       let m;
       while ((m = regex.exec(text))) {
+        if (searchMatches.length >= SEARCH_MAX_MATCHES) {
+          searchTruncated = true;
+          break;
+        }
         if (m.index > lastIndex) {
           frag.appendChild(document.createTextNode(text.slice(lastIndex, m.index)));
         }
@@ -2686,7 +2718,7 @@
         frag.appendChild(document.createTextNode(text.slice(lastIndex)));
       }
       textNode.parentNode.replaceChild(frag, textNode);
-    });
+    }
 
     if (searchMatches.length > 0) {
       currentMatchIndex = 0;
@@ -2703,16 +2735,40 @@
   }
 
   function closeSearch() {
+    clearTimeout(searchDebounceTimer);
     searchPanel.classList.remove('open');
     searchInput.value = '';
     if (renderedHTML) rebuildContentLayers(); // 注釈ハイライトを消さずに検索ハイライトだけ外す
     searchMatches = [];
     currentMatchIndex = -1;
+    searchTruncated = false;
     updateSearchCount();
   }
 
+  // 日本語入力(IME)の変換中は 'input' が候補の確定前から何度も発火するため、
+  // 変換が終わる(compositionend)まで検索を走らせない。それ以外は250msのdebounceで間引く。
+  let searchDebounceTimer = null;
+  let searchComposing = false;
+
+  function scheduleSearch() {
+    clearTimeout(searchDebounceTimer);
+    const query = searchInput.value.trim();
+    if (!query) {
+      // 消した時はハイライトが残って見えると気になるので待たずに消す
+      highlightMatches('');
+      return;
+    }
+    searchDebounceTimer = setTimeout(() => highlightMatches(query), SEARCH_DEBOUNCE_MS);
+  }
+
+  searchInput.addEventListener('compositionstart', () => { searchComposing = true; });
+  searchInput.addEventListener('compositionend', () => {
+    searchComposing = false;
+    scheduleSearch();
+  });
   searchInput.addEventListener('input', () => {
-    highlightMatches(searchInput.value.trim());
+    if (searchComposing) return;
+    scheduleSearch();
   });
   searchInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
@@ -3220,6 +3276,7 @@
     searchInput.value = '';
     searchMatches = [];
     currentMatchIndex = -1;
+    searchTruncated = false;
     updateSearchCount();
     hideSelectionButton();
     setChromeVisible(true); // 本文非表示のまま次の本に移ると戻り方が分からなくなる
@@ -3929,6 +3986,11 @@
     driveSyncToggle.checked = driveSyncEnabled;
     renderSyncStatus();
     warmUpDriveToken(); // 待たない(本棚の表示を認証で遅らせない)
+    // iOSのITP等でしばらく操作が無いとIndexedDBごと削除されることがあるため、
+    // 永続化ストレージとして扱うよう要求する(却下されても実害はない)。
+    if (navigator.storage && navigator.storage.persist) {
+      navigator.storage.persist().catch(() => {});
+    }
   }
   init();
 
