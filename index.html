@@ -872,6 +872,57 @@
     font-size: 0.85rem;
     padding: 2px;
   }
+
+  /* アプリ更新の通知トースト。本棚・ビューアのどちらでも出る。
+     上端だとヘッダー(3回タップの診断トリガー)を覆ってしまうため下端に置き、
+     ビューアではボトムバーの上に乗せる(bottom は dockBottomPx() が実測してインラインで与える) */
+  #update-toast {
+    display: none;
+    position: fixed;
+    z-index: 1100; /* シート(900)・選択ツールバー(1000)より上 */
+    bottom: 8px;
+    left: 8px;
+    right: 8px;
+    max-width: 480px;
+    margin: 0 auto;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--accent);
+    color: #fff;
+    box-shadow: 0 3px 14px rgba(0, 0, 0, 0.3);
+    font-size: 0.85rem;
+  }
+  #update-toast.visible {
+    display: flex;
+  }
+  #update-toast-text {
+    flex: 1;
+    min-width: 0;
+  }
+  #update-toast button {
+    flex: 0 0 auto;
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+  #update-toast-reload {
+    background: #fff;
+    color: var(--accent);
+    border: none;
+    border-radius: 4px;
+    padding: 6px 12px;
+    font-weight: bold;
+  }
+  #update-toast-dismiss {
+    background: none;
+    border: none;
+    color: #fff;
+    padding: 4px 6px;
+    font-size: 1rem;
+    line-height: 1;
+    opacity: 0.8;
+  }
   #viewer-content {
     flex: 1 1 auto;
     overflow-y: auto;
@@ -1080,6 +1131,12 @@
     <button id="highlight-delete-btn" type="button">削除</button>
   </div>
 
+  <div id="update-toast" role="status" aria-live="polite">
+    <span id="update-toast-text">新しい版が利用できます。</span>
+    <button id="update-toast-reload" type="button">再読み込み</button>
+    <button id="update-toast-dismiss" type="button" aria-label="閉じる">×</button>
+  </div>
+
 </div>
 
 <script src="vendor/marked.min.js"></script>
@@ -1090,7 +1147,7 @@
   // 本棚のタイトル横に表示する。実機で「どのビルドが動いているか」を確認するため
   // (Service Workerがcache-firstなので、更新が届いていないのか修正が効いていないのかを切り分ける)。
   // index.htmlを更新したらここと sw.js の CACHE_NAME を合わせて上げること。
-  const APP_VERSION = 'v7';
+  const APP_VERSION = 'v9';
 
   const screenBookshelf = document.getElementById('screen-bookshelf');
   const screenViewer = document.getElementById('screen-viewer');
@@ -2896,6 +2953,14 @@
       if (!panel.classList.contains('open')) return;
       panel.style.transform = keyboard > 1 ? `translateY(-${keyboard}px)` : '';
     });
+    positionUpdateToast();
+  }
+
+  // 更新トーストもボトムバーの上に置く(本棚画面ではバーが無いので画面下端になる)
+  function positionUpdateToast() {
+    const toast = document.getElementById('update-toast');
+    if (!toast || !toast.classList.contains('visible')) return;
+    toast.style.bottom = (dockBottomPx() + 8) + 'px';
   }
   if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', repositionDockedElements);
@@ -3212,6 +3277,7 @@
   function showScreen(screen) {
     [screenBookshelf, screenViewer].forEach(s => s.classList.remove('active'));
     screen.classList.add('active');
+    positionUpdateToast(); // ボトムバーの有無が画面で変わるので測り直す
   }
 
   // 本文タップでヘッダーとボトムバーを隠す(Kindle方式)。
@@ -3994,10 +4060,86 @@
   }
   init();
 
-  // オフライン読書用のService Worker登録。file://では仕様上登録できないため無条件にtryし、
-  // 失敗しても黙って諦める(Drive連携と同じく「非対応環境では機能が単に効かないだけ」)。
+  // オフライン読書用のService Worker登録 + アプリ更新の通知。
+  // file://では仕様上登録できないため無条件にtryし、失敗しても黙って諦める
+  // (Drive連携と同じく「非対応環境では機能が単に効かないだけ」)。
+  //
+  // SWはcache-firstなので、新しい版をプッシュしても黙っていると次に開くまで届かない。
+  // 「修正が効いていないのか、更新が届いていないのか」の切り分けを版数表示だけに頼らず、
+  // 更新が用意できた時点でその場で知らせて、ユーザーの操作で切り替えられるようにする。
+  function setupServiceWorker() {
+    const toast = document.getElementById('update-toast');
+    const toastReload = document.getElementById('update-toast-reload');
+    const toastDismiss = document.getElementById('update-toast-dismiss');
+
+    // 「ユーザーが再読み込みを押した結果の交代」だけをリロードの合図にする。
+    // 初回インストールのclaim()や別タブ発の交代でもcontrollerchangeは飛ぶため、
+    // 無条件にリロードすると読書中に画面が飛ぶ(最悪リロードの往復になる)。
+    let promoted = false;
+    let fallbackTimer = null;
+
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!promoted) return;
+      promoted = false; // 二重リロード防止
+      clearTimeout(fallbackTimer);
+      window.location.reload();
+    });
+
+    const showUpdateToast = () => {
+      toast.classList.add('visible');
+      positionUpdateToast(); // ボトムバーの高さを実測して、その上に置く
+    };
+
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
+      .then((registration) => {
+        toastDismiss.addEventListener('click', () => toast.classList.remove('visible'));
+        toastReload.addEventListener('click', () => {
+          toast.classList.remove('visible');
+          flushReadingPosition(); // リロードを挟むので、読んでいた位置を確実に残す
+          const waiting = registration.waiting;
+          if (!waiting) {
+            window.location.reload(); // 既に交代済みなら読み込み直すだけでよい
+            return;
+          }
+          promoted = true;
+          waiting.postMessage({ type: 'SKIP_WAITING' });
+          // controllerchangeが飛んでこない環境への保険。
+          // 空振りしても「古い版のまま再度トーストが出る」だけで、ループにはならない
+          fallbackTimer = setTimeout(() => window.location.reload(), 3000);
+        });
+
+        // 前回の起動で用意され、まだ適用していない版が待機している場合
+        if (registration.waiting && navigator.serviceWorker.controller) {
+          showUpdateToast();
+        }
+
+        registration.addEventListener('updatefound', () => {
+          const installing = registration.installing;
+          if (!installing) return;
+          installing.addEventListener('statechange', () => {
+            // controllerが無い = 初回インストール。これは「更新」ではないので黙っている
+            if (installing.state === 'installed' && navigator.serviceWorker.controller) {
+              showUpdateToast();
+            }
+          });
+        });
+
+        // ホーム画面から起動したPWAは、バックグラウンドから復帰してもページの再読み込みが
+        // 起きないため更新チェックが走らない。復帰時に自分で確認する
+        // (ネットワークを使うので1時間に1回までに抑える)。
+        let lastUpdateCheck = Date.now();
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState !== 'visible') return;
+          if (Date.now() - lastUpdateCheck < 60 * 60 * 1000) return;
+          lastUpdateCheck = Date.now();
+          registration.update().catch(() => {});
+        });
+      })
+      .catch(() => {});
+  }
+
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    setupServiceWorker();
   }
 })();
 </script>

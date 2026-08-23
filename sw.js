@@ -1,5 +1,5 @@
 // キャッシュ名はバージョン文字列を含める。中身(プリキャッシュ対象)を更新したらこの文字列を上げること。
-const CACHE_NAME = 'md-viewer-v7';
+const CACHE_NAME = 'md-viewer-v9';
 const PRECACHE_URLS = [
   './',
   './index.html',
@@ -11,12 +11,21 @@ const PRECACHE_URLS = [
   './icons/favicon-32.png'
 ];
 
+// ここで skipWaiting() は呼ばない。呼ぶと、開いている画面(古いindex.html)を表示したまま
+// SWだけが新しくなる「ちぐはぐな状態」になり、更新が届いたことをユーザーに伝える機会も無くなる。
+// 新しいSWは waiting のまま待機させ、ページ側が更新トーストを出す。
+// ユーザーが「再読み込み」を押した時だけ SKIP_WAITING メッセージで交代する。
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => cache.addAll(PRECACHE_URLS))
-      .then(() => self.skipWaiting())
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_URLS))
   );
+});
+
+// 待機中のSWを即座に有効化する。ページ側の更新トーストの「再読み込み」からのみ送られる。
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
 });
 
 self.addEventListener('activate', (event) => {
